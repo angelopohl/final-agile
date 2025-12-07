@@ -36,7 +36,15 @@ export default function DetallePrestamoPage() {
 
   const abrirModalPago = (cuota) => {
     setCuotaSeleccionada(cuota);
+    // Calculamos lo pendiente (Capital total - Capital ya pagado)
+    // NOTA: Tu backend maneja mora aparte, aquí sugerimos el capital pendiente + mora pendiente si quisieras mostrarlo,
+    // pero para mantenerlo simple y seguro, sugerimos el capital restante.
     const capitalPendiente = cuota.amount - (cuota.capitalPagado || 0);
+
+    // Si quisieras sugerir también la mora pendiente (opcional visualmente):
+    // const moraPendiente = (cuota.moraCalculadaTotal || 0) - (cuota.moraPagada || 0);
+    // const totalSugerido = capitalPendiente + moraPendiente;
+
     setMontoPagar(capitalPendiente.toFixed(2));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");
@@ -49,6 +57,14 @@ export default function DetallePrestamoPage() {
       const doc = new jsPDF();
       const fechaHoy = new Date().toLocaleDateString();
 
+      // Datos reales pagados (tu backend guarda esto)
+      const capitalPagado = cuotaData.capitalPagado || 0;
+      const moraPagada = cuotaData.moraPagada || 0;
+      const totalAbonado = capitalPagado + moraPagada;
+
+      // Saldo pendiente (Capital original - capital pagado)
+      const saldoCapital = cuotaData.amount - capitalPagado;
+
       // Encabezado
       doc.setFontSize(18);
       doc.text("Comprobante de Pago", 14, 20);
@@ -58,36 +74,53 @@ export default function DetallePrestamoPage() {
       doc.text("RUC: 12345678901", 14, 40);
       doc.text("Dirección: Av. Ejemplo 123", 14, 50);
 
-      // Cliente (Usamos datos del estado prestamo)
+      // Cliente
       doc.text(`Cliente DNI: ${prestamo.dniCliente}`, 14, 60);
-      // Si tienes el nombre del cliente en el objeto prestamo, agrégalo aquí:
-      // doc.text(`Nombre: ${prestamo.nombreCliente}`, 14, 70);
 
       // Detalles del préstamo
       doc.text(`Préstamo ID: ${prestamo.id}`, 14, 80);
-      doc.text(`Fecha de emisión: ${fechaHoy}`, 14, 90);
+      const fechaPago = cuotaData.fechaUltimoPago
+        ? new Date(cuotaData.fechaUltimoPago).toLocaleDateString()
+        : fechaHoy;
+      doc.text(`Fecha de Último Pago: ${fechaPago}`, 14, 90);
 
       // Detalle de la transacción
       doc.line(14, 100, 200, 100); // Línea separadora
       doc.text("Descripción:", 14, 110);
       doc.text(`Pago Cuota N° ${cuotaData.num}`, 14, 120);
 
-      // Intentamos recuperar la fecha de pago si existe, sino la de hoy
-      const fechaPago = cuotaData.fechaPago
-        ? new Date(cuotaData.fechaPago).toLocaleDateString()
-        : fechaHoy;
-      doc.text(`Fecha de Pago: ${fechaPago}`, 14, 130);
+      // Desglose de montos
+      doc.setFontSize(11);
+      doc.text(`Capital Amortizado: S/ ${capitalPagado.toFixed(2)}`, 14, 130);
+      if (moraPagada > 0) {
+        doc.text(`Mora Pagada: S/ ${moraPagada.toFixed(2)}`, 14, 140);
+      }
 
-      // Total
+      // Total Pagado
       doc.setFontSize(16);
-      doc.text(`Monto Pagado: S/ ${cuotaData.amount.toFixed(2)}`, 14, 150);
+      doc.text(`Total Abonado: S/ ${totalAbonado.toFixed(2)}`, 14, 155);
+
+      // Mostrar saldo pendiente si existe
+      if (saldoCapital > 0.01) {
+        doc.setFontSize(12);
+        doc.setTextColor(200, 0, 0); // Rojo
+        doc.text(
+          `Saldo Capital Pendiente: S/ ${saldoCapital.toFixed(2)}`,
+          14,
+          165
+        );
+      } else {
+        doc.setFontSize(12);
+        doc.setTextColor(0, 128, 0); // Verde
+        doc.text(`¡Cuota Cancelada!`, 14, 165);
+      }
+      doc.setTextColor(0, 0, 0); // Reset color
 
       // Pie de página
       doc.setFontSize(10);
-      doc.text("Gracias por su cumplimiento.", 14, 170);
-      doc.text("www.confeccionesdarkys.com", 14, 180);
+      doc.text("Gracias por su cumplimiento.", 14, 180);
+      doc.text("www.confeccionesdarkys.com", 14, 190);
 
-      // Descargar el archivo PDF directamente
       doc.save(`comprobante_cuota_${cuotaData.num}_${prestamo.dniCliente}.pdf`);
     } catch (error) {
       console.error("Error generando el comprobante:", error);
@@ -108,15 +141,51 @@ export default function DetallePrestamoPage() {
       return;
     }
 
+    // --- VALIDACIÓN DE EXCESO DE PAGO (RESTAURADA) ---
+    // Calculamos cuánto capital falta. Nota: Tu backend puede cobrar mora extra,
+    // así que permitimos un pago mayor si hay mora, pero advertimos si es excesivo.
+    const capitalPendiente =
+      cuotaSeleccionada.amount - (cuotaSeleccionada.capitalPagado || 0);
+    // Estimación simple de mora para validar (opcional)
+    // Si el usuario intenta pagar 1000 y la deuda es 100, alertamos.
+    // Usamos un margen de seguridad amplio por si hay mora acumulada.
+    if (montoNum > capitalPendiente * 2 + 50 && capitalPendiente > 0) {
+      // Esta es una validación de seguridad básica para evitar errores de tipeo grandes
+      if (
+        !confirm(
+          `El monto S/ ${montoNum} parece muy alto comparado con el capital pendiente (S/ ${capitalPendiente.toFixed(
+            2
+          )}). ¿Desea continuar?`
+        )
+      ) {
+        return;
+      }
+    }
+
     setProcesando(true);
 
     try {
       if (medioPago === "EFECTIVO") {
         const recibidoNum = parseFloat(montoRecibido || "0");
+
+        // 1. Validar que se haya ingresado algo
         if (!recibidoNum || recibidoNum <= 0) {
           alert("Ingrese el monto recibido en efectivo");
           setProcesando(false);
           return;
+        }
+
+        // 2. ✅ NUEVA VALIDACIÓN SOLICITADA: Recibido >= A Pagar
+        if (recibidoNum < montoNum) {
+          alert(
+            `Error: El monto recibido (S/ ${recibidoNum.toFixed(
+              2
+            )}) es menor que el monto a pagar (S/ ${montoNum.toFixed(
+              2
+            )}). Debe ser igual o mayor.`
+          );
+          setProcesando(false);
+          return; // Detiene la ejecución
         }
 
         const res = await fetch("/api/pagos", {
@@ -127,16 +196,16 @@ export default function DetallePrestamoPage() {
             numeroCuota: cuotaSeleccionada.num,
             montoPagado: montoNum,
             medioPago: "EFECTIVO",
-            montoRecibido: recibidoNum,
+            // montoRecibido: recibidoNum, // El backend no usa esto para lógica, pero podrías enviarlo si lo guardas
           }),
         });
 
         const data = await res.json();
 
         if (res.ok) {
-          alert("Pago en efectivo registrado.");
+          alert("Pago registrado correctamente.");
           setModalPagoOpen(false);
-          fetchPrestamo();
+          fetchPrestamo(); // Recarga los datos para ver el nuevo estado
         } else {
           alert("Error: " + data.message);
         }
@@ -144,7 +213,7 @@ export default function DetallePrestamoPage() {
         return;
       }
 
-      // Lógica para BILLETERA y TARJETA (Se mantiene igual)
+      // Lógica para BILLETERA y TARJETA
       if (medioPago === "BILLETERA" || medioPago === "TARJETA") {
         const res = await fetch("/api/flow/orden", {
           method: "POST",
@@ -234,81 +303,110 @@ export default function DetallePrestamoPage() {
               <th className="p-3">#</th>
               <th className="p-3">Vence</th>
               <th className="p-3 text-right">Cuota</th>
+              <th className="p-3 text-right">Abonado</th>{" "}
+              {/* Columna Agregada */}
               <th className="p-3 text-center">Estado</th>
               <th className="p-3 text-center">Acción</th>
             </tr>
           </thead>
           <tbody>
-            {prestamo.cronograma.map((c) => (
-              <tr key={c.num} className="border-t">
-                <td className="p-3">{c.num}</td>
-                <td className="p-3">{formatearFecha(c.dueDate)}</td>
-                <td className="p-3 text-right">S/ {c.amount.toFixed(2)}</td>
-                <td className="p-3 text-center">
-                  {c.estado === "PAGADO" ? (
-                    <span className="text-green-600 font-bold text-xs">
-                      PAGADO
-                    </span>
-                  ) : c.estado === "PARCIAL" ? (
-                    <span className="text-yellow-700 font-bold text-xs">
-                      PARCIAL
-                    </span>
-                  ) : (
-                    <span className="text-gray-600 text-xs">PENDIENTE</span>
-                  )}
-                </td>
-                <td className="p-3 text-center">
-                  {/* LÓGICA DEL BOTÓN MODIFICADA */}
-                  {c.estado === "PAGADO" ? (
-                    <button
-                      onClick={() => generarComprobante(c)}
-                      className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1 rounded text-xs flex items-center gap-1 mx-auto"
-                      title="Descargar Comprobante"
-                    >
-                      {/* Icono de documento/impresora */}
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        strokeWidth={1.5}
-                        stroke="currentColor"
-                        className="w-3 h-3"
+            {prestamo.cronograma.map((c) => {
+              // Calculamos lo abonado sumando capital + mora pagada
+              const abonadoTotal = (c.capitalPagado || 0) + (c.moraPagada || 0);
+
+              return (
+                <tr key={c.num} className="border-t">
+                  <td className="p-3">{c.num}</td>
+                  <td className="p-3">{formatearFecha(c.dueDate)}</td>
+                  <td className="p-3 text-right">S/ {c.amount.toFixed(2)}</td>
+                  <td className="p-3 text-right font-medium text-gray-700">
+                    S/ {abonadoTotal.toFixed(2)}
+                  </td>
+                  <td className="p-3 text-center">
+                    {c.estado === "PAGADO" ? (
+                      <span className="text-green-600 font-bold text-xs bg-green-100 px-2 py-1 rounded">
+                        PAGADO
+                      </span>
+                    ) : c.estado === "PARCIAL" ? (
+                      <span className="text-yellow-700 font-bold text-xs bg-yellow-100 px-2 py-1 rounded">
+                        PARCIAL
+                      </span>
+                    ) : (
+                      <span className="text-gray-600 text-xs bg-gray-100 px-2 py-1 rounded">
+                        PENDIENTE
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3 text-center flex justify-center gap-2">
+                    {/* BOTÓN RECIBO: Si hay algo abonado (> 0), mostramos el botón */}
+                    {abonadoTotal > 0 && (
+                      <button
+                        onClick={() => generarComprobante(c)}
+                        className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
+                        title="Descargar Comprobante"
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0 1 10.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0 .229 2.523a1.125 1.125 0 0 1-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0 0 21 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 0 0-1.913-.247M6.34 18H5.25A2.25 2.25 0 0 1 3 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 0 1 1.913-.247m10.5 0a48.536 48.536 0 0 0-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5Zm-3 0h.008v.008H15V10.5Z"
-                        />
-                      </svg>
-                      Recibo
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => abrirModalPago(c)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs"
-                    >
-                      Cobrar
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                        {/* Icono simple de documento */}
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={1.5}
+                          stroke="currentColor"
+                          className="w-4 h-4"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
+                          />
+                        </svg>
+                      </button>
+                    )}
+
+                    {/* BOTÓN COBRAR: Si NO está pagado, mostramos el botón de acción */}
+                    {c.estado !== "PAGADO" && (
+                      <button
+                        onClick={() => abrirModalPago(c)}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs"
+                      >
+                        {c.estado === "PARCIAL" ? "Completar" : "Cobrar"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {/* Modal de Pago (Sin cambios importantes) */}
+      {/* Modal de Pago */}
       {modalPagoOpen && cuotaSeleccionada && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
             <div className="bg-blue-600 p-4 text-white font-bold flex justify-between">
-              <span>Cobrar cuota {cuotaSeleccionada.num}</span>
+              <span>
+                {cuotaSeleccionada.estado === "PARCIAL"
+                  ? "Completar Cuota"
+                  : "Cobrar Cuota"}{" "}
+                {cuotaSeleccionada.num}
+              </span>
               <button onClick={() => setModalPagoOpen(false)}>X</button>
             </div>
 
             <div className="p-4 space-y-4">
               <div>
-                <p className="text-gray-500 text-xs">Monto a pagar</p>
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                  <label>Monto a pagar</label>
+                  {/* Mostramos cuánto falta de capital para guiar al usuario */}
+                  <span>
+                    Pendiente Capital: S/{" "}
+                    {(
+                      cuotaSeleccionada.amount -
+                      (cuotaSeleccionada.capitalPagado || 0)
+                    ).toFixed(2)}
+                  </span>
+                </div>
                 <input
                   type="number"
                   value={montoPagar}
