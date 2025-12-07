@@ -39,3 +39,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+
+# Archivos de entorno (AQUI ESTAN TUS CLAVES)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.env.*
+
+# Dependencias y compilación de Next.js
+node_modules/
+.next/
+build/
+dist/
