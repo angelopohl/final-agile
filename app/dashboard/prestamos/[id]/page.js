@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { jsPDF } from "jspdf"; // Asegúrate de tener instalado: npm install jspdf
+import { jsPDF } from "jspdf";
 
 export default function DetallePrestamoPage() {
   const { id } = useParams();
@@ -12,6 +12,8 @@ export default function DetallePrestamoPage() {
   const [loading, setLoading] = useState(true);
   const [modalPagoOpen, setModalPagoOpen] = useState(false);
   const [cuotaSeleccionada, setCuotaSeleccionada] = useState(null);
+
+  // Estados del formulario de pago
   const [montoPagar, setMontoPagar] = useState("");
   const [montoRecibido, setMontoRecibido] = useState("");
   const [medioPago, setMedioPago] = useState("EFECTIVO");
@@ -34,35 +36,69 @@ export default function DetallePrestamoPage() {
     if (id) fetchPrestamo();
   }, [id]);
 
-  const abrirModalPago = (cuota) => {
-    setCuotaSeleccionada(cuota);
-    // Calculamos lo pendiente (Capital total - Capital ya pagado)
-    // NOTA: Tu backend maneja mora aparte, aquí sugerimos el capital pendiente + mora pendiente si quisieras mostrarlo,
-    // pero para mantenerlo simple y seguro, sugerimos el capital restante.
+  // --- LÓGICA DE MORA CORREGIDA ---
+  // Ahora interpreta el 1% como TASA MENSUAL, no diaria.
+  const calcularDesglosePago = (cuota) => {
+    if (!cuota) return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
+
     const capitalPendiente = cuota.amount - (cuota.capitalPagado || 0);
 
-    // Si quisieras sugerir también la mora pendiente (opcional visualmente):
-    // const moraPendiente = (cuota.moraCalculadaTotal || 0) - (cuota.moraPagada || 0);
-    // const totalSugerido = capitalPendiente + moraPendiente;
+    // Si ya no hay deuda de capital, retornamos 0
+    if (capitalPendiente <= 0.01) {
+      return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
+    }
 
-    setMontoPagar(capitalPendiente.toFixed(2));
+    const fechaVencimiento = new Date(cuota.dueDate);
+    const hoy = new Date();
+
+    // Normalizamos fechas (sin horas) para cálculo exacto de días
+    fechaVencimiento.setHours(0, 0, 0, 0);
+    hoy.setHours(0, 0, 0, 0);
+
+    const msPorDia = 1000 * 60 * 60 * 24;
+    const diferenciaMs = hoy - fechaVencimiento;
+    const diasAtraso = Math.ceil(diferenciaMs / msPorDia);
+
+    let mora = 0;
+
+    // Solo aplicamos mora si hay días de atraso
+    if (diasAtraso > 0) {
+      // CORRECCIÓN: 1% Mensual prorrateado por día
+      // Tasa Mensual = 0.01 (1%)
+      // Tasa Diaria = 0.01 / 30
+      const TASA_MENSUAL = 0.01;
+      const tasaDiaria = TASA_MENSUAL / 30;
+
+      mora = capitalPendiente * tasaDiaria * diasAtraso;
+    }
+
+    return {
+      capital: capitalPendiente,
+      mora: mora,
+      total: capitalPendiente + mora,
+      diasAtraso: diasAtraso > 0 ? diasAtraso : 0,
+    };
+  };
+
+  const abrirModalPago = (cuota) => {
+    setCuotaSeleccionada(cuota);
+
+    const desglose = calcularDesglosePago(cuota);
+
+    setMontoPagar(desglose.total.toFixed(2));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");
     setModalPagoOpen(true);
   };
 
-  // --- LÓGICA MOVIDA AL FRONTEND PARA DESCARGA DIRECTA ---
   const generarComprobante = (cuotaData) => {
     try {
       const doc = new jsPDF();
       const fechaHoy = new Date().toLocaleDateString();
 
-      // Datos reales pagados (tu backend guarda esto)
       const capitalPagado = cuotaData.capitalPagado || 0;
       const moraPagada = cuotaData.moraPagada || 0;
       const totalAbonado = capitalPagado + moraPagada;
-
-      // Saldo pendiente (Capital original - capital pagado)
       const saldoCapital = cuotaData.amount - capitalPagado;
 
       // Encabezado
@@ -85,7 +121,7 @@ export default function DetallePrestamoPage() {
       doc.text(`Fecha de Último Pago: ${fechaPago}`, 14, 90);
 
       // Detalle de la transacción
-      doc.line(14, 100, 200, 100); // Línea separadora
+      doc.line(14, 100, 200, 100);
       doc.text("Descripción:", 14, 110);
       doc.text(`Pago Cuota N° ${cuotaData.num}`, 14, 120);
 
@@ -100,10 +136,9 @@ export default function DetallePrestamoPage() {
       doc.setFontSize(16);
       doc.text(`Total Abonado: S/ ${totalAbonado.toFixed(2)}`, 14, 155);
 
-      // Mostrar saldo pendiente si existe
       if (saldoCapital > 0.01) {
         doc.setFontSize(12);
-        doc.setTextColor(200, 0, 0); // Rojo
+        doc.setTextColor(200, 0, 0);
         doc.text(
           `Saldo Capital Pendiente: S/ ${saldoCapital.toFixed(2)}`,
           14,
@@ -111,12 +146,11 @@ export default function DetallePrestamoPage() {
         );
       } else {
         doc.setFontSize(12);
-        doc.setTextColor(0, 128, 0); // Verde
+        doc.setTextColor(0, 128, 0);
         doc.text(`¡Cuota Cancelada!`, 14, 165);
       }
-      doc.setTextColor(0, 0, 0); // Reset color
+      doc.setTextColor(0, 0, 0);
 
-      // Pie de página
       doc.setFontSize(10);
       doc.text("Gracias por su cumplimiento.", 14, 180);
       doc.text("www.confeccionesdarkys.com", 14, 190);
@@ -141,21 +175,15 @@ export default function DetallePrestamoPage() {
       return;
     }
 
-    // --- VALIDACIÓN DE EXCESO DE PAGO (RESTAURADA) ---
-    // Calculamos cuánto capital falta. Nota: Tu backend puede cobrar mora extra,
-    // así que permitimos un pago mayor si hay mora, pero advertimos si es excesivo.
-    const capitalPendiente =
-      cuotaSeleccionada.amount - (cuotaSeleccionada.capitalPagado || 0);
-    // Estimación simple de mora para validar (opcional)
-    // Si el usuario intenta pagar 1000 y la deuda es 100, alertamos.
-    // Usamos un margen de seguridad amplio por si hay mora acumulada.
-    if (montoNum > capitalPendiente * 2 + 50 && capitalPendiente > 0) {
-      // Esta es una validación de seguridad básica para evitar errores de tipeo grandes
+    const desglose = calcularDesglosePago(cuotaSeleccionada);
+
+    // Validación con margen de error por redondeo
+    if (montoNum > desglose.total + 1) {
       if (
         !confirm(
-          `El monto S/ ${montoNum} parece muy alto comparado con el capital pendiente (S/ ${capitalPendiente.toFixed(
+          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado con mora (S/ ${desglose.total.toFixed(
             2
-          )}). ¿Desea continuar?`
+          )}). ¿Está seguro de continuar?`
         )
       ) {
         return;
@@ -168,24 +196,20 @@ export default function DetallePrestamoPage() {
       if (medioPago === "EFECTIVO") {
         const recibidoNum = parseFloat(montoRecibido || "0");
 
-        // 1. Validar que se haya ingresado algo
         if (!recibidoNum || recibidoNum <= 0) {
           alert("Ingrese el monto recibido en efectivo");
           setProcesando(false);
           return;
         }
 
-        // 2. ✅ NUEVA VALIDACIÓN SOLICITADA: Recibido >= A Pagar
         if (recibidoNum < montoNum) {
           alert(
             `Error: El monto recibido (S/ ${recibidoNum.toFixed(
               2
-            )}) es menor que el monto a pagar (S/ ${montoNum.toFixed(
-              2
-            )}). Debe ser igual o mayor.`
+            )}) es menor que el monto a pagar (S/ ${montoNum.toFixed(2)}).`
           );
           setProcesando(false);
-          return; // Detiene la ejecución
+          return;
         }
 
         const res = await fetch("/api/pagos", {
@@ -196,7 +220,6 @@ export default function DetallePrestamoPage() {
             numeroCuota: cuotaSeleccionada.num,
             montoPagado: montoNum,
             medioPago: "EFECTIVO",
-            // montoRecibido: recibidoNum, // El backend no usa esto para lógica, pero podrías enviarlo si lo guardas
           }),
         });
 
@@ -205,7 +228,7 @@ export default function DetallePrestamoPage() {
         if (res.ok) {
           alert("Pago registrado correctamente.");
           setModalPagoOpen(false);
-          fetchPrestamo(); // Recarga los datos para ver el nuevo estado
+          fetchPrestamo();
         } else {
           alert("Error: " + data.message);
         }
@@ -213,7 +236,7 @@ export default function DetallePrestamoPage() {
         return;
       }
 
-      // Lógica para BILLETERA y TARJETA
+      // Lógica para BILLETERA y TARJETA (Flow)
       if (medioPago === "BILLETERA" || medioPago === "TARJETA") {
         const res = await fetch("/api/flow/orden", {
           method: "POST",
@@ -303,15 +326,13 @@ export default function DetallePrestamoPage() {
               <th className="p-3">#</th>
               <th className="p-3">Vence</th>
               <th className="p-3 text-right">Cuota</th>
-              <th className="p-3 text-right">Abonado</th>{" "}
-              {/* Columna Agregada */}
+              <th className="p-3 text-right">Abonado</th>
               <th className="p-3 text-center">Estado</th>
               <th className="p-3 text-center">Acción</th>
             </tr>
           </thead>
           <tbody>
             {prestamo.cronograma.map((c) => {
-              // Calculamos lo abonado sumando capital + mora pagada
               const abonadoTotal = (c.capitalPagado || 0) + (c.moraPagada || 0);
 
               return (
@@ -338,14 +359,12 @@ export default function DetallePrestamoPage() {
                     )}
                   </td>
                   <td className="p-3 text-center flex justify-center gap-2">
-                    {/* BOTÓN RECIBO: Si hay algo abonado (> 0), mostramos el botón */}
                     {abonadoTotal > 0 && (
                       <button
                         onClick={() => generarComprobante(c)}
                         className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
                         title="Descargar Comprobante"
                       >
-                        {/* Icono simple de documento */}
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
                           fill="none"
@@ -363,7 +382,6 @@ export default function DetallePrestamoPage() {
                       </button>
                     )}
 
-                    {/* BOTÓN COBRAR: Si NO está pagado, mostramos el botón de acción */}
                     {c.estado !== "PAGADO" && (
                       <button
                         onClick={() => abrirModalPago(c)}
@@ -395,18 +413,41 @@ export default function DetallePrestamoPage() {
             </div>
 
             <div className="p-4 space-y-4">
-              <div>
-                <div className="flex justify-between text-xs text-gray-500 mb-1">
-                  <label>Monto a pagar</label>
-                  {/* Mostramos cuánto falta de capital para guiar al usuario */}
+              {/* Información Detallada del Monto (Capital + Mora) */}
+              <div className="bg-gray-50 p-3 rounded border text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span>Capital Pendiente:</span>
                   <span>
-                    Pendiente Capital: S/{" "}
-                    {(
-                      cuotaSeleccionada.amount -
-                      (cuotaSeleccionada.capitalPagado || 0)
-                    ).toFixed(2)}
+                    S/{" "}
+                    {calcularDesglosePago(cuotaSeleccionada).capital.toFixed(2)}
                   </span>
                 </div>
+                {calcularDesglosePago(cuotaSeleccionada).mora > 0 && (
+                  <div className="flex justify-between text-red-600 font-bold">
+                    <span>
+                      + Mora (
+                      {calcularDesglosePago(cuotaSeleccionada).diasAtraso} días
+                      al 1% Mensual):
+                    </span>
+                    <span>
+                      S/{" "}
+                      {calcularDesglosePago(cuotaSeleccionada).mora.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+                <div className="border-t pt-1 flex justify-between font-bold text-lg text-gray-800">
+                  <span>Total a Pagar:</span>
+                  <span>
+                    S/{" "}
+                    {calcularDesglosePago(cuotaSeleccionada).total.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">
+                  Monto que pagará el cliente
+                </label>
                 <input
                   type="number"
                   value={montoPagar}
@@ -418,7 +459,9 @@ export default function DetallePrestamoPage() {
 
               {medioPago === "EFECTIVO" && (
                 <div>
-                  <p className="text-gray-500 text-xs">Monto recibido</p>
+                  <p className="text-gray-500 text-xs">
+                    Monto recibido (Efectivo)
+                  </p>
                   <input
                     type="number"
                     value={montoRecibido}
