@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
+import { generarPDFCronograma } from "@/lib/pdfGenerator"; // Importación de la librería de tu amigo
 
 export default function DetallePrestamoPage() {
   const { id } = useParams();
@@ -24,7 +25,31 @@ export default function DetallePrestamoPage() {
       const res = await fetch("/api/prestamos");
       const data = await res.json();
       const encontrado = data.find((p) => p.id === id);
-      setPrestamo(encontrado || null);
+
+      if (encontrado) {
+        // --- PARCHE DE TU AMIGA: Recuperar nombre si falta ---
+        if (!encontrado.nombreCliente) {
+          try {
+            const clienteRes = await fetch("/api/cliente/verificar", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dni: encontrado.dniCliente }),
+            });
+            if (clienteRes.ok) {
+              const cd = await clienteRes.json();
+              const n = `${cd.apellidoPaterno || ""} ${
+                cd.apellidoMaterno || ""
+              } ${cd.nombres || ""}`;
+              encontrado.nombreCliente = n.trim();
+            }
+          } catch (e) {
+            console.warn("Error recuperando nombre", e);
+          }
+        }
+        setPrestamo(encontrado);
+      } else {
+        setPrestamo(null);
+      }
     } catch (e) {
       console.error("Error cargando préstamo:", e);
     } finally {
@@ -89,61 +114,46 @@ export default function DetallePrestamoPage() {
     setModalPagoOpen(true);
   };
 
-  const generarComprobante = (cuotaData) => {
+  const generarComprobante = async (cuotaData) => {
     try {
-      const doc = new jsPDF();
-      const fechaHoy = new Date().toLocaleDateString();
+      const res = await fetch("/api/comprobantes/generar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prestamoId: prestamo.id,
+          numeroCuota: cuotaData.num,
+          monto: (cuotaData.capitalPagado || 0) + (cuotaData.moraPagada || 0),
+          medioPago: cuotaData.medioPago || "EFECTIVO",
+          cliente: {
+            nombre: prestamo.nombreCliente || "Cliente",
+            numero_documento: prestamo.dniCliente,
+            direccion: "-",
+          },
+        }),
+      });
 
-      const capitalPagado = Number(cuotaData.capitalPagado || 0);
-      const moraPagada = Number(cuotaData.moraPagada || 0);
-      const totalAbonado = capitalPagado + moraPagada;
-      const saldoCapital = Number(cuotaData.amount) - capitalPagado;
-
-      doc.setFontSize(18);
-      doc.text("Comprobante de Pago", 14, 20);
-      doc.setFontSize(12);
-      doc.text("Emisor: Confecciones Darkys", 14, 30);
-      doc.text("RUC: 12345678901", 14, 40);
-      doc.text("Dirección: Av. Ejemplo 123", 14, 50);
-      doc.text(`Cliente DNI: ${prestamo.dniCliente}`, 14, 60);
-      doc.text(`Préstamo ID: ${prestamo.id}`, 14, 80);
-
-      const fechaPago = cuotaData.fechaUltimoPago
-        ? new Date(cuotaData.fechaUltimoPago).toLocaleDateString()
-        : fechaHoy;
-      doc.text(`Fecha de Último Pago: ${fechaPago}`, 14, 90);
-      doc.line(14, 100, 200, 100);
-      doc.text("Descripción:", 14, 110);
-      doc.text(`Pago Cuota N° ${cuotaData.num}`, 14, 120);
-      doc.setFontSize(11);
-      doc.text(`Capital Amortizado: S/ ${capitalPagado.toFixed(2)}`, 14, 130);
-      if (moraPagada > 0) {
-        doc.text(`Mora Pagada: S/ ${moraPagada.toFixed(2)}`, 14, 140);
-      }
-      doc.setFontSize(16);
-      doc.text(`Total Abonado: S/ ${totalAbonado.toFixed(2)}`, 14, 155);
-
-      if (saldoCapital > 0.01) {
-        doc.setFontSize(12);
-        doc.setTextColor(200, 0, 0);
-        doc.text(
-          `Saldo Capital Pendiente: S/ ${saldoCapital.toFixed(2)}`,
-          14,
-          165
-        );
+      if (res.ok) {
+        // Recibimos el archivo BLOB (Binario)
+        const blob = await res.blob();
+        // Creamos una URL temporal
+        const url = window.URL.createObjectURL(blob);
+        // Creamos un link invisible para forzar la descarga
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `comprobante_${prestamo.id}_${cuotaData.num}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
       } else {
-        doc.setFontSize(12);
-        doc.setTextColor(0, 128, 0);
-        doc.text(`¡Cuota Cancelada!`, 14, 165);
+        const errData = await res.json();
+        alert(
+          "Error al generar comprobante: " + (errData.error || "Desconocido")
+        );
       }
-      doc.setTextColor(0, 0, 0);
-      doc.setFontSize(10);
-      doc.text("Gracias por su cumplimiento.", 14, 180);
-      doc.text("www.confeccionesdarkys.com", 14, 190);
-      doc.save(`comprobante_cuota_${cuotaData.num}_${prestamo.dniCliente}.pdf`);
-    } catch (error) {
-      console.error("Error generando el comprobante:", error);
-      alert("Error al generar el PDF.");
+    } catch (e) {
+      console.error("Error generando el comprobante:", e);
+      alert("Error de conexión al generar el comprobante.");
     }
   };
 
@@ -166,9 +176,9 @@ export default function DetallePrestamoPage() {
     if (montoNum > desglose.total + 1) {
       if (
         !confirm(
-          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado (S/ ${desglose.total.toFixed(
+          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado con mora (S/ ${desglose.total.toFixed(
             2
-          )}). ¿Está seguro?`
+          )}). ¿Está seguro de continuar?`
         )
       ) {
         return;
@@ -269,9 +279,25 @@ export default function DetallePrestamoPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">
-        Cobranza - DNI {prestamo.dniCliente}
-      </h1>
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold">
+          Cobranza - DNI {prestamo.dniCliente}
+        </h1>
+        {/* --- BOTÓN NUEVO: DESCARGAR CRONOGRAMA --- */}
+        <button
+          onClick={() => generarPDFCronograma(prestamo)}
+          className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-700 text-sm flex items-center gap-2"
+        >
+          📄 Cronograma Completo
+        </button>
+      </div>
+
+      {prestamo.nombreCliente && (
+        <p className="text-gray-600 font-medium -mt-4">
+          Cliente: {prestamo.nombreCliente}
+        </p>
+      )}
+
       <div className="bg-white rounded shadow p-4 grid grid-cols-2 gap-4 text-sm">
         <div>
           <p className="text-gray-500">Monto solicitado</p>

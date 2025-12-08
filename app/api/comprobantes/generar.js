@@ -1,74 +1,124 @@
 // app/api/comprobantes/generar.js
+// Versión actualizada: 2025-12-07 v2.0 (Diseño de tu amiga)
 
-import { jsPDF } from "jspdf"; // Importar jsPDF
+import { jsPDF } from "jspdf";
 
 export async function POST(req) {
   if (req.method === "POST") {
     try {
-      // Obtiene los datos de la solicitud
-      const { prestamoId, numeroCuota, monto, medioPago, cliente, productos } =
+      const { prestamoId, numeroCuota, monto, medioPago, cliente } =
         await req.json();
 
-      // Verifica que los datos esenciales estén presentes
       if (!prestamoId || !numeroCuota || !monto || !cliente) {
-        return new Response(
-          JSON.stringify({
-            error: "Faltan datos para generar el comprobante.",
-          }),
-          { status: 400 }
-        );
+        return new Response(JSON.stringify({ error: "Faltan datos." }), {
+          status: 400,
+        });
       }
 
-      // Crea el documento PDF
       const doc = new jsPDF();
+      const fechaActual = new Date();
+      const fechaFormateada = fechaActual.toISOString().split("T")[0];
+      const horaFormateada = fechaActual.toTimeString().split(" ")[0];
+      const numeroComprobante = `0000${Math.floor(Math.random() * 1000)}`.slice(
+        -3
+      );
 
-      // Encabezado
-      doc.setFontSize(18);
-      doc.text("Comprobante de Pago", 14, 20);
+      let yPos = 20;
 
-      doc.setFontSize(12);
-      doc.text("Emisor: Confecciones Darkys", 14, 30);
-      doc.text("RUC: 12345678901", 14, 40);
-      doc.text("Dirección: Av. Ejemplo 123", 14, 50);
+      // --- ENCABEZADO ---
+      doc.setFontSize(16);
+      doc.setFont(undefined, "bold");
+      doc.text("PRESTAPE S.A.C.", 105, yPos, { align: "center" });
 
-      // Cliente
-      doc.text(`Cliente: ${cliente.nombre}`, 14, 60);
-      doc.text(`Documento: ${cliente.numero_documento}`, 14, 70);
-      doc.text(`Dirección: ${cliente.direccion}`, 14, 80);
+      yPos += 8;
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      doc.text("RUC: 20721834495", 105, yPos, { align: "center" });
 
-      // Detalles del préstamo
-      doc.text(`Préstamo ID: ${prestamoId}`, 14, 90);
-      doc.text(`Número de cuota: ${numeroCuota}`, 14, 100);
+      yPos += 5;
+      doc.text("DIRECCIÓN FISCAL: Trujillo - Trujillo - Perú", 105, yPos, {
+        align: "center",
+      });
 
-      // Detalle de la transacción
-      doc.text("Descripción:", 14, 110);
-      doc.text(`Cuota ${numeroCuota} - Monto: S/ ${monto.toFixed(2)}`, 14, 120);
+      yPos += 5;
+      doc.text("Web: https://final-agile.vercel.app/dashboard", 105, yPos, {
+        align: "center",
+      });
 
-      // Método de pago
-      doc.text(`Método de pago: ${medioPago}`, 14, 130);
+      yPos += 10;
+      doc.setLineWidth(0.5);
+      doc.line(14, yPos, 196, yPos);
 
-      // Total
+      yPos += 10;
+
+      // --- TÍTULO ---
       doc.setFontSize(14);
-      doc.text(`Total a pagar: S/ ${monto.toFixed(2)}`, 14, 140);
+      doc.setFont(undefined, "bold");
+      doc.text("COMPROBANTE DE PAGO - CUOTA DE PRÉSTAMO", 105, yPos, {
+        align: "center",
+      });
 
-      // Pie de página
-      doc.text("Gracias por tu pago.", 14, 150);
-      doc.text("www.confeccionesdarkys.com", 14, 160);
+      yPos += 10;
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      doc.text(`Número: ${numeroComprobante}`, 14, yPos);
+      doc.text(`Fecha: ${fechaFormateada} ${horaFormateada}`, 14, yPos + 6);
+      doc.text(`Tipo de pago: ${medioPago || "Efectivo"}`, 14, yPos + 12);
 
-      // Guardar el archivo PDF
+      yPos += 20;
+      doc.line(14, yPos, 196, yPos);
+      yPos += 8;
+
+      // --- DATOS CLIENTE ---
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      doc.text("DATOS DEL CLIENTE", 14, yPos);
+      yPos += 8;
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      doc.text(`Nombre: ${cliente.nombre || "N/A"}`, 14, yPos);
+      doc.text(`Documento: ${cliente.numero_documento || "N/A"}`, 14, yPos + 6);
+
+      yPos += 16;
+      doc.line(14, yPos, 196, yPos);
+      yPos += 8;
+
+      // --- DETALLES ---
+      doc.setFontSize(12);
+      doc.setFont(undefined, "bold");
+      doc.text("DETALLES DEL PAGO", 14, yPos);
+      yPos += 8;
+      doc.setFontSize(10);
+      doc.setFont(undefined, "normal");
+      doc.text(`Préstamo ID: ${prestamoId}`, 14, yPos);
+      doc.text(`Cuota N°: ${numeroCuota}`, 14, yPos + 6);
+
+      yPos += 16;
+      doc.setLineWidth(0.5);
+      doc.line(14, yPos, 196, yPos);
+      yPos += 10;
+
+      // --- TOTAL ---
+      doc.setFontSize(14);
+      doc.setFont(undefined, "bold");
+      doc.text("TOTAL PAGADO:", 14, yPos);
+      doc.text(`S/ ${monto.toFixed(2)}`, 160, yPos);
+
+      yPos += 20;
+      doc.setFontSize(9);
+      doc.setFont(undefined, "italic");
+      doc.text("Gracias por confiar en PRESTAPE S.A.C.", 105, yPos, {
+        align: "center",
+      });
+
       doc.save(`comprobante_pago_${prestamoId}_${numeroCuota}.pdf`);
 
-      // Responder con un éxito
-      return new Response(
-        JSON.stringify({ message: "Comprobante generado exitosamente." }),
-        { status: 200 }
-      );
+      return new Response(JSON.stringify({ message: "OK" }), { status: 200 });
     } catch (err) {
-      console.error("Error al generar el comprobante:", err);
-      return new Response(
-        JSON.stringify({ error: err.message || "Error de servidor" }),
-        { status: 500 }
-      );
+      console.error("Error PDF:", err);
+      return new Response(JSON.stringify({ error: err.message }), {
+        status: 500,
+      });
     }
   } else {
     return new Response(JSON.stringify({ error: "Método no permitido" }), {

@@ -7,52 +7,46 @@ import {
   where,
   getDocs,
   limit,
+  doc, // <-- Nuevo
+  getDoc, // <-- Nuevo
 } from "firebase/firestore";
 import { FinancialService } from "@/lib/financialMath";
 
-// --- GET: Buscar préstamos (Igual que antes) ---
+// --- GET (Sin cambios) ---
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const dni = searchParams.get("dni");
-
   try {
     const prestamosRef = collection(db, "prestamos");
     let q;
-
     if (dni) {
       q = query(prestamosRef, where("dniCliente", "==", dni));
     } else {
       q = query(prestamosRef, limit(50));
     }
-
     const querySnapshot = await getDocs(q);
     const prestamos = [];
     querySnapshot.forEach((doc) => {
       prestamos.push({ id: doc.id, ...doc.data() });
     });
-
     return NextResponse.json(prestamos);
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// --- POST: Crear nuevo préstamo ---
+// --- POST ---
 export async function POST(request) {
   try {
     const body = await request.json();
     const { dni, monto, cuotas, tea, pep, fechaInicio } = body;
 
     if (!dni || !monto || !cuotas || !tea) {
-      return NextResponse.json(
-        { message: "Faltan datos requeridos" },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: "Faltan datos" }, { status: 400 });
     }
 
-    // --- VALIDACIÓN ESTADO PENDIENTE (Lógica Binaria) ---
+    // --- TU VALIDACIÓN (INTACTA) ---
     const prestamosRef = collection(db, "prestamos");
-    // Solo buscamos PENDIENTE. Como eliminamos VIGENTE, esto cubre todo caso activo.
     const q = query(
       prestamosRef,
       where("dniCliente", "==", dni),
@@ -67,7 +61,7 @@ export async function POST(request) {
       );
     }
 
-    // --- CÁLCULOS (Tu lógica financiera) ---
+    // --- TUS CÁLCULOS (INTACTOS) ---
     const tem = FinancialService.calculateTem(tea);
     const cronograma = FinancialService.generateSchedule(
       monto,
@@ -75,7 +69,6 @@ export async function POST(request) {
       cuotas,
       fechaInicio
     );
-
     const montoCuota = cronograma[0].amount;
     const totalIntereses = cronograma.reduce(
       (acc, item) => acc + item.interest,
@@ -83,16 +76,30 @@ export async function POST(request) {
     );
     const totalPagar = monto + totalIntereses;
 
-    // Fechas
     let fechaFinal = fechaInicio;
-    if (fechaFinal && fechaFinal.length === 10) {
-      fechaFinal += "T12:00:00";
-    } else if (!fechaFinal) {
-      fechaFinal = new Date().toISOString();
+    if (fechaFinal && fechaFinal.length === 10) fechaFinal += "T12:00:00";
+    else if (!fechaFinal) fechaFinal = new Date().toISOString();
+
+    // --- NUEVO: OBTENER NOMBRE (Lógica de tu amiga) ---
+    let nombreCliente = "N/A";
+    try {
+      const clienteRef = doc(db, "clientes", dni);
+      const clienteSnap = await getDoc(clienteRef);
+
+      if (clienteSnap.exists()) {
+        const d = clienteSnap.data();
+        nombreCliente = `${d.apellidoPaterno || ""} ${
+          d.apellidoMaterno || ""
+        } ${d.nombres || ""}`.trim();
+      }
+    } catch (e) {
+      console.log("No se pudo obtener nombre, guardando sin nombre.");
     }
+    // --------------------------------------------------
 
     const nuevoPrestamo = {
       dniCliente: dni,
+      nombreCliente: nombreCliente, // <-- Campo nuevo guardado
       montoSolicitado: parseFloat(monto),
       tea: parseFloat(tea),
       tem: tem,
@@ -101,7 +108,7 @@ export async function POST(request) {
       totalIntereses: parseFloat(totalIntereses.toFixed(2)),
       montoTotalPagar: parseFloat(totalPagar.toFixed(2)),
       esPep: pep || false,
-      estado: "PENDIENTE", // Nace PENDIENTE
+      estado: "PENDIENTE",
       fechaInicio: fechaFinal,
       fechaCreacion: new Date().toISOString(),
       cronograma: cronograma,
