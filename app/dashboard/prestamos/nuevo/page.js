@@ -23,41 +23,63 @@ export default function NuevoPrestamoPage() {
   const [cronograma, setCronograma] = useState([]);
   const [alertas, setAlertas] = useState({ uit: false, pep: false });
 
-  // --- Lógica Paso 1: Verificar DNI ---
-  // --- Lógica Paso 1: Verificar DNI (MODIFICADA) ---
+  // --- Lógica Paso 1: Verificar DNI y Validar Deuda Pendiente ---
   const verificarDNI = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError("");
 
-    console.log("🚀 Enviando petición al backend..."); // LOG 1
-
     try {
+      // 1. Verificar si el cliente existe
       const res = await fetch("/api/cliente/verificar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dni: dniBusqueda }),
       });
 
-      console.log("📡 Estado Respuesta:", res.status); // LOG 2
-
       const data = await res.json();
-      console.log("📦 Datos recibidos en Frontend:", data); // LOG 3
 
-      if (res.ok) {
-        // Aseguramos que data no sea null antes de guardar
-        if (data && (data.nombres || data.nombreCompleto)) {
-          setCliente(data);
-          setPaso(2); // Avanzamos de pantalla
-        } else {
-          setError("El backend respondió OK, pero sin datos de nombres.");
-        }
-      } else {
+      if (!res.ok) {
         setError(data.message || "Error al verificar DNI");
+        setLoading(false);
+        return;
       }
+
+      if (!data || (!data.nombres && !data.nombreCompleto)) {
+        setError("El backend respondió OK, pero sin datos de nombres.");
+        setLoading(false);
+        return;
+      }
+
+      // 2. 🛡️ VALIDACIÓN DE PRÉSTAMOS VIGENTES
+      // Consultamos los préstamos para ver si este DNI tiene deuda
+      const resPrestamos = await fetch("/api/prestamos");
+      const todosLosPrestamos = await resPrestamos.json();
+
+      // Buscamos si existe algún préstamo activo para este cliente
+      // Consideramos "Activo" si el estado NO es "PAGADO" ni "RECHAZADO"
+      const prestamoActivo = todosLosPrestamos.find((p) => {
+        return (
+          p.dniCliente === data.dni &&
+          p.estado !== "PAGADO" &&
+          p.estado !== "FINALIZADO"
+        );
+      });
+
+      if (prestamoActivo) {
+        setError(
+          `⚠️ El cliente ya tiene un préstamo vigente (ID: ${prestamoActivo.id}) en estado: ${prestamoActivo.estado}. Debe cancelarlo antes de solicitar uno nuevo.`
+        );
+        setLoading(false);
+        return; // 🛑 DETENEMOS EL FLUJO AQUÍ
+      }
+
+      // 3. Si no tiene deuda, avanzamos
+      setCliente(data);
+      setPaso(2);
     } catch (err) {
       console.error("🔴 Error Frontend:", err);
-      setError("Error de conexión con el servidor");
+      setError("Error de conexión al validar datos.");
     } finally {
       setLoading(false);
     }
@@ -110,7 +132,6 @@ export default function NuevoPrestamoPage() {
 
       if (res.ok) {
         alert("✅ Préstamo Creado Exitosamente ID: " + data.id);
-        // Redirigir al Dashboard o limpiar
         window.location.href = "/dashboard";
       } else {
         alert("❌ Error: " + (data.message || data.error));
@@ -151,11 +172,14 @@ export default function NuevoPrestamoPage() {
               disabled={loading || dniBusqueda.length !== 8}
               className="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700 disabled:bg-gray-400 font-bold"
             >
-              {loading ? "Buscando..." : "Verificar"}
+              {loading ? "Verificando..." : "Verificar"}
             </button>
           </form>
           {error && (
-            <p className="text-red-500 mt-4 font-semibold">⚠️ {error}</p>
+            <div className="mt-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+              <p className="font-bold">No se puede proceder:</p>
+              <p>{error}</p>
+            </div>
           )}
         </div>
       )}
@@ -263,7 +287,7 @@ export default function NuevoPrestamoPage() {
                     <a
                       href="/ddjj_formato.pdf"
                       download="Declaracion_Jurada_Origen_Fondos.pdf"
-                      className="mt-2 inline-block text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded hover:bg-orange-300 decoration-none"
+                      className="decoration-none text-orange-800"
                     >
                       📄 Descargar DDJJ Origen de Fondos
                     </a>

@@ -36,55 +36,53 @@ export default function DetallePrestamoPage() {
     if (id) fetchPrestamo();
   }, [id]);
 
-  // --- LÓGICA DE MORA CORREGIDA ---
-  // Ahora interpreta el 1% como TASA MENSUAL, no diaria.
+  // --- LÓGICA DE MORA CON MEMORIA (Mora Congelada) ---
   const calcularDesglosePago = (cuota) => {
     if (!cuota) return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
 
-    const capitalPendiente = cuota.amount - (cuota.capitalPagado || 0);
+    const capitalPagado = Number(cuota.capitalPagado || 0);
+    const capitalPendiente = Number(cuota.amount) - capitalPagado;
+    const moraPagada = Number(cuota.moraPagada || 0);
 
-    // Si ya no hay deuda de capital, retornamos 0
-    if (capitalPendiente <= 0.01) {
-      return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
-    }
+    // LEEMOS LA MORA HISTÓRICA GUARDADA EN BD
+    const moraCongelada = Number(cuota.moraCongelada || 0);
 
+    // Fechas
     const fechaVencimiento = new Date(cuota.dueDate);
     const hoy = new Date();
-
-    // Normalizamos fechas (sin horas) para cálculo exacto de días
     fechaVencimiento.setHours(0, 0, 0, 0);
     hoy.setHours(0, 0, 0, 0);
 
     const msPorDia = 1000 * 60 * 60 * 24;
-    const diferenciaMs = hoy - fechaVencimiento;
-    const diasAtraso = Math.ceil(diferenciaMs / msPorDia);
+    const diasAtraso = Math.ceil((hoy - fechaVencimiento) / msPorDia);
 
-    let mora = 0;
+    let moraActiva = 0;
 
-    // Solo aplicamos mora si hay días de atraso
-    if (diasAtraso > 0) {
-      // CORRECCIÓN: 1% Mensual prorrateado por día
-      // Tasa Mensual = 0.01 (1%)
-      // Tasa Diaria = 0.01 / 30
+    // Calculamos mora SOLO sobre el capital vivo hoy
+    if (capitalPendiente > 0.01 && diasAtraso > 0) {
       const TASA_MENSUAL = 0.01;
       const tasaDiaria = TASA_MENSUAL / 30;
-
-      mora = capitalPendiente * tasaDiaria * diasAtraso;
+      moraActiva = capitalPendiente * tasaDiaria * diasAtraso;
     }
+
+    // Mora Total = (Mora del saldo actual) + (Mora Histórica Congelada)
+    const moraTotalGenerada = moraActiva + moraCongelada;
+
+    // Restamos lo que ya pagó
+    const deudaMora = Math.max(0, moraTotalGenerada - moraPagada);
 
     return {
       capital: capitalPendiente,
-      mora: mora,
-      total: capitalPendiente + mora,
+      mora: deudaMora,
+      total: capitalPendiente + deudaMora,
       diasAtraso: diasAtraso > 0 ? diasAtraso : 0,
+      moraSnapshot: moraTotalGenerada, // Dato para enviar al backend
     };
   };
 
   const abrirModalPago = (cuota) => {
     setCuotaSeleccionada(cuota);
-
     const desglose = calcularDesglosePago(cuota);
-
     setMontoPagar(desglose.total.toFixed(2));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");
@@ -96,43 +94,32 @@ export default function DetallePrestamoPage() {
       const doc = new jsPDF();
       const fechaHoy = new Date().toLocaleDateString();
 
-      const capitalPagado = cuotaData.capitalPagado || 0;
-      const moraPagada = cuotaData.moraPagada || 0;
+      const capitalPagado = Number(cuotaData.capitalPagado || 0);
+      const moraPagada = Number(cuotaData.moraPagada || 0);
       const totalAbonado = capitalPagado + moraPagada;
-      const saldoCapital = cuotaData.amount - capitalPagado;
+      const saldoCapital = Number(cuotaData.amount) - capitalPagado;
 
-      // Encabezado
       doc.setFontSize(18);
       doc.text("Comprobante de Pago", 14, 20);
-
       doc.setFontSize(12);
       doc.text("Emisor: Confecciones Darkys", 14, 30);
       doc.text("RUC: 12345678901", 14, 40);
       doc.text("Dirección: Av. Ejemplo 123", 14, 50);
-
-      // Cliente
       doc.text(`Cliente DNI: ${prestamo.dniCliente}`, 14, 60);
-
-      // Detalles del préstamo
       doc.text(`Préstamo ID: ${prestamo.id}`, 14, 80);
+
       const fechaPago = cuotaData.fechaUltimoPago
         ? new Date(cuotaData.fechaUltimoPago).toLocaleDateString()
         : fechaHoy;
       doc.text(`Fecha de Último Pago: ${fechaPago}`, 14, 90);
-
-      // Detalle de la transacción
       doc.line(14, 100, 200, 100);
       doc.text("Descripción:", 14, 110);
       doc.text(`Pago Cuota N° ${cuotaData.num}`, 14, 120);
-
-      // Desglose de montos
       doc.setFontSize(11);
       doc.text(`Capital Amortizado: S/ ${capitalPagado.toFixed(2)}`, 14, 130);
       if (moraPagada > 0) {
         doc.text(`Mora Pagada: S/ ${moraPagada.toFixed(2)}`, 14, 140);
       }
-
-      // Total Pagado
       doc.setFontSize(16);
       doc.text(`Total Abonado: S/ ${totalAbonado.toFixed(2)}`, 14, 155);
 
@@ -150,11 +137,9 @@ export default function DetallePrestamoPage() {
         doc.text(`¡Cuota Cancelada!`, 14, 165);
       }
       doc.setTextColor(0, 0, 0);
-
       doc.setFontSize(10);
       doc.text("Gracias por su cumplimiento.", 14, 180);
       doc.text("www.confeccionesdarkys.com", 14, 190);
-
       doc.save(`comprobante_cuota_${cuotaData.num}_${prestamo.dniCliente}.pdf`);
     } catch (error) {
       console.error("Error generando el comprobante:", error);
@@ -181,9 +166,9 @@ export default function DetallePrestamoPage() {
     if (montoNum > desglose.total + 1) {
       if (
         !confirm(
-          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado con mora (S/ ${desglose.total.toFixed(
+          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado (S/ ${desglose.total.toFixed(
             2
-          )}). ¿Está seguro de continuar?`
+          )}). ¿Está seguro?`
         )
       ) {
         return;
@@ -192,22 +177,25 @@ export default function DetallePrestamoPage() {
 
     setProcesando(true);
 
+    // Payload base
+    const payload = {
+      prestamoId: prestamo.id,
+      numeroCuota: cuotaSeleccionada.num,
+      montoPagado: montoNum,
+      // ENVIAMOS EL SNAPSHOT AL BACKEND
+      moraCalculadaSnapshot: desglose.moraSnapshot,
+    };
+
     try {
       if (medioPago === "EFECTIVO") {
         const recibidoNum = parseFloat(montoRecibido || "0");
-
         if (!recibidoNum || recibidoNum <= 0) {
           alert("Ingrese el monto recibido en efectivo");
           setProcesando(false);
           return;
         }
-
         if (recibidoNum < montoNum) {
-          alert(
-            `Error: El monto recibido (S/ ${recibidoNum.toFixed(
-              2
-            )}) es menor que el monto a pagar (S/ ${montoNum.toFixed(2)}).`
-          );
+          alert(`Error: Recibido menor a pagar.`);
           setProcesando(false);
           return;
         }
@@ -215,12 +203,7 @@ export default function DetallePrestamoPage() {
         const res = await fetch("/api/pagos", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prestamoId: prestamo.id,
-            numeroCuota: cuotaSeleccionada.num,
-            montoPagado: montoNum,
-            medioPago: "EFECTIVO",
-          }),
+          body: JSON.stringify({ ...payload, medioPago: "EFECTIVO" }),
         });
 
         const data = await res.json();
@@ -236,33 +219,29 @@ export default function DetallePrestamoPage() {
         return;
       }
 
-      // Lógica para BILLETERA y TARJETA (Flow)
       if (medioPago === "BILLETERA" || medioPago === "TARJETA") {
         const res = await fetch("/api/flow/orden", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            prestamoId: prestamo.id,
-            numeroCuota: cuotaSeleccionada.num,
+            ...payload,
             monto: montoNum,
             billetera: medioPago === "BILLETERA",
           }),
         });
 
         const data = await res.json();
-
         if (!res.ok || !data.urlPago) {
-          alert(`Error Flow: ${data.error || "No se generó link de pago"}`);
+          alert(`Error Flow: ${data.error || "No se generó link"}`);
           setProcesando(false);
           return;
         }
-
         window.location.href = data.urlPago;
         return;
       }
     } catch (error) {
       console.error("Error en confirmarPago:", error);
-      alert("Error de conexión al registrar el pago.");
+      alert("Error de conexión.");
     } finally {
       setProcesando(false);
     }
@@ -293,8 +272,6 @@ export default function DetallePrestamoPage() {
       <h1 className="text-2xl font-bold">
         Cobranza - DNI {prestamo.dniCliente}
       </h1>
-
-      {/* Resumen Superior */}
       <div className="bg-white rounded shadow p-4 grid grid-cols-2 gap-4 text-sm">
         <div>
           <p className="text-gray-500">Monto solicitado</p>
@@ -318,7 +295,6 @@ export default function DetallePrestamoPage() {
         </div>
       </div>
 
-      {/* Tabla de Cuotas */}
       <div className="bg-white rounded shadow overflow-hidden">
         <table className="w-full text-sm text-left">
           <thead className="bg-gray-100 font-bold">
@@ -334,7 +310,6 @@ export default function DetallePrestamoPage() {
           <tbody>
             {prestamo.cronograma.map((c) => {
               const abonadoTotal = (c.capitalPagado || 0) + (c.moraPagada || 0);
-
               return (
                 <tr key={c.num} className="border-t">
                   <td className="p-3">{c.num}</td>
@@ -363,25 +338,10 @@ export default function DetallePrestamoPage() {
                       <button
                         onClick={() => generarComprobante(c)}
                         className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
-                        title="Descargar Comprobante"
                       >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          strokeWidth={1.5}
-                          stroke="currentColor"
-                          className="w-4 h-4"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
-                          />
-                        </svg>
+                        📄
                       </button>
                     )}
-
                     {c.estado !== "PAGADO" && (
                       <button
                         onClick={() => abrirModalPago(c)}
@@ -398,7 +358,6 @@ export default function DetallePrestamoPage() {
         </table>
       </div>
 
-      {/* Modal de Pago */}
       {modalPagoOpen && cuotaSeleccionada && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
@@ -411,9 +370,7 @@ export default function DetallePrestamoPage() {
               </span>
               <button onClick={() => setModalPagoOpen(false)}>X</button>
             </div>
-
             <div className="p-4 space-y-4">
-              {/* Información Detallada del Monto (Capital + Mora) */}
               <div className="bg-gray-50 p-3 rounded border text-sm space-y-1">
                 <div className="flex justify-between">
                   <span>Capital Pendiente:</span>
@@ -424,11 +381,7 @@ export default function DetallePrestamoPage() {
                 </div>
                 {calcularDesglosePago(cuotaSeleccionada).mora > 0 && (
                   <div className="flex justify-between text-red-600 font-bold">
-                    <span>
-                      + Mora (
-                      {calcularDesglosePago(cuotaSeleccionada).diasAtraso} días
-                      al 1% Mensual):
-                    </span>
+                    <span>+ Mora Total:</span>
                     <span>
                       S/{" "}
                       {calcularDesglosePago(cuotaSeleccionada).mora.toFixed(2)}

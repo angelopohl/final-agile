@@ -6,12 +6,11 @@ import {
   query,
   where,
   getDocs,
-  orderBy,
   limit,
 } from "firebase/firestore";
 import { FinancialService } from "@/lib/financialMath";
 
-// --- GET: Buscar préstamos (Por DNI o Todos) ---
+// --- GET: Buscar préstamos (Igual que antes) ---
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const dni = searchParams.get("dni");
@@ -21,16 +20,12 @@ export async function GET(request) {
     let q;
 
     if (dni) {
-      // Si hay DNI, filtramos
       q = query(prestamosRef, where("dniCliente", "==", dni));
     } else {
-      // Si NO hay DNI, traemos los últimos 50 (Modo Historial General)
-      // Nota: orderBy requiere un índice en Firebase, si falla úsalo sin orderBy primero
       q = query(prestamosRef, limit(50));
     }
 
     const querySnapshot = await getDocs(q);
-
     const prestamos = [];
     querySnapshot.forEach((doc) => {
       prestamos.push({ id: doc.id, ...doc.data() });
@@ -42,7 +37,7 @@ export async function GET(request) {
   }
 }
 
-// --- POST: Crear nuevo préstamo (Mantenemos igual que antes) ---
+// --- POST: Crear nuevo préstamo ---
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -50,13 +45,14 @@ export async function POST(request) {
 
     if (!dni || !monto || !cuotas || !tea) {
       return NextResponse.json(
-        { message: "Faltan datos (dni, monto, cuotas, tea)" },
+        { message: "Faltan datos requeridos" },
         { status: 400 }
       );
     }
 
-    // Regla: Un solo préstamo pendiente por cliente
+    // --- VALIDACIÓN ESTADO PENDIENTE (Lógica Binaria) ---
     const prestamosRef = collection(db, "prestamos");
+    // Solo buscamos PENDIENTE. Como eliminamos VIGENTE, esto cubre todo caso activo.
     const q = query(
       prestamosRef,
       where("dniCliente", "==", dni),
@@ -66,12 +62,12 @@ export async function POST(request) {
 
     if (!duplicados.empty) {
       return NextResponse.json(
-        { message: "El cliente ya tiene un préstamo pendiente." },
+        { message: "El cliente ya tiene un préstamo PENDIENTE." },
         { status: 409 }
       );
     }
 
-    // Cálculos
+    // --- CÁLCULOS (Tu lógica financiera) ---
     const tem = FinancialService.calculateTem(tea);
     const cronograma = FinancialService.generateSchedule(
       monto,
@@ -87,7 +83,7 @@ export async function POST(request) {
     );
     const totalPagar = monto + totalIntereses;
 
-    // Fechas seguras
+    // Fechas
     let fechaFinal = fechaInicio;
     if (fechaFinal && fechaFinal.length === 10) {
       fechaFinal += "T12:00:00";
@@ -105,7 +101,7 @@ export async function POST(request) {
       totalIntereses: parseFloat(totalIntereses.toFixed(2)),
       montoTotalPagar: parseFloat(totalPagar.toFixed(2)),
       esPep: pep || false,
-      estado: "PENDIENTE",
+      estado: "PENDIENTE", // Nace PENDIENTE
       fechaInicio: fechaFinal,
       fechaCreacion: new Date().toISOString(),
       cronograma: cronograma,
