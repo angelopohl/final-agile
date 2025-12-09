@@ -30,7 +30,7 @@ export async function POST(req) {
     const url = `${apiUrl}/payment/getStatus?${queryString}&s=${signature}`;
 
     const resFlow = await fetch(url);
-    const data = await resFlow.json();
+    const data = await resFlow.json(); // <--- Aquí viene 'optional' si lo enviamos
 
     if (!resFlow.ok || !data.commerceOrder) {
       console.error("Error status Flow:", data);
@@ -43,13 +43,28 @@ export async function POST(req) {
     }
 
     // ----------------------------
+    // [NUEVO] RECUPERAR ETIQUETA DE MEDIO DE PAGO
+    // ----------------------------
+    let medioPagoFinal = "FLOW"; // Valor por defecto (seguridad para no romper nada)
+
+    if (data.optional) {
+      try {
+        const optionalData = JSON.parse(data.optional);
+        if (optionalData.etiqueta) {
+          medioPagoFinal = optionalData.etiqueta; // "TARJETA" o "BILLETERA DIGITAL"
+        }
+      } catch (e) {
+        console.warn("Error leyendo optional, usando default:", e);
+      }
+    }
+
+    // ----------------------------
     // SEPARAR COMMERCE ORDER
-    // prestamoId-CnumeroCuota
     // ----------------------------
     const [prestamoId, cuotaStr] = data.commerceOrder.split("-C");
     const numeroCuota = parseInt(cuotaStr);
 
-    // Registrar pago en Firestore usando tu API existente
+    // Registrar pago en Firestore
     const pagoRes = await fetch(
       `${process.env.NEXT_PUBLIC_BASE_URL}/api/pagos`,
       {
@@ -59,7 +74,7 @@ export async function POST(req) {
           prestamoId,
           numeroCuota,
           montoPagado: data.amount,
-          medioPago: "FLOW",
+          medioPago: medioPagoFinal, // <--- Usamos la variable inteligente
         }),
       }
     );

@@ -14,10 +14,10 @@ export async function POST(req) {
       );
     }
 
-    const emailCliente = "cliente@miempresa.com"; // Este es el correo genérico
+    const emailCliente = "cliente@miempresa.com";
     const apiKey = process.env.FLOW_API_KEY;
     const secretKey = process.env.FLOW_API_SECRET;
-    const apiUrl = process.env.FLOW_API_URL; // sandbox o producción
+    const apiUrl = process.env.FLOW_API_URL;
 
     const commerceOrder = `${prestamoId}-C${numeroCuota}`;
     const subject = `Pago cuota ${numeroCuota}`;
@@ -28,7 +28,10 @@ export async function POST(req) {
     const urlNotify = `${process.env.NEXT_PUBLIC_BASE_URL}/api/flow/webhook`;
 
     // Se configura el paymentMethod según si el pago es con billetera o tarjeta
-    const paymentMethod = billetera ? 29 : 11; // 152 = Yape (billetera), 11 = Tarjetas
+    const paymentMethod = billetera ? 29 : 11; // 29 = Yape/Billetera, 11 = Tarjetas
+
+    // --- [NUEVO] DEFINIMOS LA ETIQUETA EXACTA ---
+    const etiquetaPago = billetera ? "BILLETERA DIGITAL" : "TARJETA";
 
     const params = {
       apiKey,
@@ -37,9 +40,12 @@ export async function POST(req) {
       currency,
       amount,
       email: emailCliente,
-      paymentMethod, // Yape es 152, Tarjetas es 11
+      paymentMethod,
       urlConfirmation: urlNotify,
       urlReturn,
+      // --- [NUEVO] AGREGAMOS EL CAMPO OPTIONAL ---
+      // Esto viaja a Flow y regresa en el Webhook. No afecta al usuario.
+      optional: JSON.stringify({ etiqueta: etiquetaPago }),
     };
 
     // Ordenamos los parámetros alfabéticamente (Flow lo exige)
@@ -48,7 +54,7 @@ export async function POST(req) {
       .map((key) => `${key}=${params[key]}`)
       .join("&");
 
-    // Creamos la firma para asegurar que los parámetros no han sido modificados
+    // Creamos la firma (incluyendo el campo optional nuevo)
     const signature = crypto
       .createHmac("sha256", secretKey)
       .update(queryString)
@@ -68,7 +74,6 @@ export async function POST(req) {
 
     const dataFlow = await res.json();
 
-    // Verificamos que Flow nos haya devuelto el enlace y el token
     if (!res.ok || !dataFlow.url || !dataFlow.token) {
       console.error("Error Flow:", dataFlow);
       return NextResponse.json(
@@ -79,7 +84,6 @@ export async function POST(req) {
 
     const urlPago = `${dataFlow.url}?token=${dataFlow.token}`;
 
-    // Respondemos con el enlace de pago
     return NextResponse.json({ urlPago });
   } catch (err) {
     console.error("FLOW_ORDEN Error:", err);
