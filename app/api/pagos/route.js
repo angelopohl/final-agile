@@ -11,6 +11,7 @@ export async function POST(request) {
       montoPagado,
       medioPago,
       moraCalculadaSnapshot,
+      montoRecibido,
     } = body;
 
     if (!prestamoId || !numeroCuota || !montoPagado) {
@@ -168,6 +169,7 @@ export async function POST(request) {
           mora: pagoParaMora,
         },
         medioPago,
+        montoRecibido: montoRecibido || montoPagado,
         fechaRegistro: new Date().toISOString(),
         usuarioCajero: "admin",
       };

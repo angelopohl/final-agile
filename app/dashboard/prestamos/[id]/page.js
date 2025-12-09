@@ -116,6 +116,12 @@ export default function DetallePrestamoPage() {
 
   const generarComprobante = async (cuotaData) => {
     try {
+      // Calcular el saldo de capital pendiente del préstamo
+      const saldoCapital = prestamo.cronograma.reduce((total, c) => {
+        const capitalPendiente = c.capital - (c.capitalPagado || 0);
+        return total + capitalPendiente;
+      }, 0);
+
       const res = await fetch("/api/comprobantes/generar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -128,6 +134,10 @@ export default function DetallePrestamoPage() {
             nombre: prestamo.nombreCliente || "Cliente",
             numero_documento: prestamo.dniCliente,
             direccion: "-",
+          },
+          prestamo: {
+            fechaInicio: prestamo.fechaInicio,
+            saldoCapital: saldoCapital,
           },
         }),
       });
@@ -213,7 +223,7 @@ export default function DetallePrestamoPage() {
         const res = await fetch("/api/pagos", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...payload, medioPago: "EFECTIVO" }),
+          body: JSON.stringify({ ...payload, medioPago: "EFECTIVO", montoRecibido: recibidoNum }),
         });
 
         const data = await res.json();
