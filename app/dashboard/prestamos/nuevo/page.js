@@ -16,7 +16,7 @@ export default function NuevoPrestamoPage() {
     cuotas: 12,
     tea: 20,
     pep: false,
-    fechaInicio: new Date().toISOString().split("T")[0], // Fecha de hoy (Bloqueada)
+    fechaInicio: new Date().toISOString().split("T")[0], // Fecha inicial por defecto (hoy)
   });
 
   // Resultados Simulados
@@ -52,12 +52,9 @@ export default function NuevoPrestamoPage() {
       }
 
       // 2. 🛡️ VALIDACIÓN DE PRÉSTAMOS VIGENTES
-      // Consultamos los préstamos para ver si este DNI tiene deuda
       const resPrestamos = await fetch("/api/prestamos");
       const todosLosPrestamos = await resPrestamos.json();
 
-      // Buscamos si existe algún préstamo activo para este cliente
-      // Consideramos "Activo" si el estado NO es "PAGADO" ni "RECHAZADO"
       const prestamoActivo = todosLosPrestamos.find((p) => {
         return (
           p.dniCliente === data.dni &&
@@ -71,10 +68,9 @@ export default function NuevoPrestamoPage() {
           `⚠️ El cliente ya tiene un préstamo vigente (ID: ${prestamoActivo.id}) en estado: ${prestamoActivo.estado}. Debe cancelarlo antes de solicitar uno nuevo.`
         );
         setLoading(false);
-        return; // 🛑 DETENEMOS EL FLUJO AQUÍ
+        return;
       }
 
-      // 3. Si no tiene deuda, avanzamos
       setCliente(data);
       setPaso(2);
     } catch (err) {
@@ -87,7 +83,7 @@ export default function NuevoPrestamoPage() {
 
   // --- Lógica Paso 2: Simulación y Guardado ---
 
-  // Efecto: Recalcular cronograma cada vez que cambian los inputs
+  // Efecto: Recalcular cronograma cada vez que cambian los inputs (incluyendo fecha)
   useEffect(() => {
     if (paso === 2) {
       const tem = FinancialService.calculateTem(form.tea);
@@ -95,11 +91,10 @@ export default function NuevoPrestamoPage() {
         Number(form.monto),
         tem,
         Number(form.cuotas),
-        form.fechaInicio
+        form.fechaInicio // Ahora usa la fecha dinámica que elijas
       );
       setCronograma(schedule);
 
-      // Reglas de Negocio Visuales (UIT = 5350 aprox)
       const LIMITE_UIT = 5350;
       setAlertas({
         uit: Number(form.monto) >= LIMITE_UIT,
@@ -119,7 +114,7 @@ export default function NuevoPrestamoPage() {
         cuotas: Number(form.cuotas),
         tea: Number(form.tea),
         pep: form.pep,
-        fechaInicio: form.fechaInicio,
+        fechaInicio: form.fechaInicio, // Enviamos la fecha seleccionada al backend
       };
 
       const res = await fetch("/api/prestamos", {
@@ -248,17 +243,24 @@ export default function NuevoPrestamoPage() {
                 />
               </div>
 
+              {/* --- CAMBIO AQUÍ: FECHA DESBLOQUEADA --- */}
               <div>
                 <label className="block text-gray-700 font-bold">
-                  Fecha Inicio
+                  Fecha Inicio (Libre)
                 </label>
                 <input
                   type="date"
-                  className="w-full border p-2 rounded mt-1 bg-gray-100 cursor-not-allowed"
+                  className="w-full border p-2 rounded mt-1 bg-white border-blue-300" // Estilo editable
                   value={form.fechaInicio}
-                  readOnly
+                  onChange={(e) =>
+                    setForm({ ...form, fechaInicio: e.target.value })
+                  } // Ahora permite cambios
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Seleccione pasado para simular mora o futuro para agendar.
+                </p>
               </div>
+              {/* --------------------------------------- */}
 
               <div className="flex items-center gap-2 mt-4">
                 <input
