@@ -87,17 +87,20 @@ export default function NuevoPrestamoPage() {
   useEffect(() => {
     if (paso === 2) {
       const tem = FinancialService.calculateTem(form.tea);
+      // Validamos que monto sea número para evitar NaN en cálculos
+      const montoCalc = form.monto === "" ? 0 : Number(form.monto);
+
       const schedule = FinancialService.generateSchedule(
-        Number(form.monto),
+        montoCalc,
         tem,
         Number(form.cuotas),
-        form.fechaInicio // Ahora usa la fecha dinámica que elijas
+        form.fechaInicio
       );
       setCronograma(schedule);
 
       const LIMITE_UIT = 5350;
       setAlertas({
-        uit: Number(form.monto) >= LIMITE_UIT,
+        uit: montoCalc >= LIMITE_UIT,
         pep: form.pep,
       });
     }
@@ -105,16 +108,27 @@ export default function NuevoPrestamoPage() {
 
   const guardarPrestamo = async () => {
     if (!cliente) return;
+
+    // --- VALIDACIÓN DE LÍMITE MÁXIMO ---
+    const montoNum = Number(form.monto);
+    if (montoNum > 999999.99) {
+      // Ajustado a 6 enteros
+      return alert("El monto no puede superar los S/ 999,999.99");
+    }
+    if (montoNum <= 0) {
+      return alert("El monto debe ser mayor a 0");
+    }
+
     setLoading(true);
 
     try {
       const payload = {
         dni: cliente.dni,
-        monto: Number(form.monto),
+        monto: montoNum,
         cuotas: Number(form.cuotas),
         tea: Number(form.tea),
         pep: form.pep,
-        fechaInicio: form.fechaInicio, // Enviamos la fecha seleccionada al backend
+        fechaInicio: form.fechaInicio,
       };
 
       const res = await fetch("/api/prestamos", {
@@ -135,6 +149,19 @@ export default function NuevoPrestamoPage() {
       alert("Error de red");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- CONTROLADOR DE INPUT MONTO (REGEX) ---
+  const handleMontoChange = (e) => {
+    const val = e.target.value;
+    // Explicación Regex:
+    // ^          -> Inicio
+    // \d{0,6}    -> De 0 a 6 dígitos enteros
+    // (\.\d{0,2})? -> Opcionalmente un punto seguido de 0 a 2 decimales
+    // $          -> Fin
+    if (/^\d{0,6}(\.\d{0,2})?$/.test(val)) {
+      setForm({ ...form, monto: val });
     }
   };
 
@@ -207,14 +234,18 @@ export default function NuevoPrestamoPage() {
                 <label className="block text-gray-700 font-bold">
                   Monto (S/)
                 </label>
+                {/* --- INPUT VALIDADO CON REGEX --- */}
                 <input
-                  type="number"
+                  type="text" // Cambiado a text para mejor control del regex (number a veces deja pasar caracteres raros)
+                  inputMode="decimal" // Teclado numérico en móviles
                   className="w-full border p-2 rounded mt-1"
                   value={form.monto}
-                  onChange={(e) => setForm({ ...form, monto: e.target.value })}
-                  min="1"
-                  max="1000000"
+                  onChange={handleMontoChange} // Usamos la nueva función
+                  placeholder="0.00"
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  Máx. 6 enteros y 2 decimales
+                </p>
               </div>
 
               <div>
@@ -243,24 +274,23 @@ export default function NuevoPrestamoPage() {
                 />
               </div>
 
-              {/* --- CAMBIO AQUÍ: FECHA DESBLOQUEADA --- */}
+              {/* FECHA DESBLOQUEADA */}
               <div>
                 <label className="block text-gray-700 font-bold">
                   Fecha Inicio (Libre)
                 </label>
                 <input
                   type="date"
-                  className="w-full border p-2 rounded mt-1 bg-white border-blue-300" // Estilo editable
+                  className="w-full border p-2 rounded mt-1 bg-white border-blue-300"
                   value={form.fechaInicio}
                   onChange={(e) =>
                     setForm({ ...form, fechaInicio: e.target.value })
-                  } // Ahora permite cambios
+                  }
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Seleccione pasado para simular mora o futuro para agendar.
                 </p>
               </div>
-              {/* --------------------------------------- */}
 
               <div className="flex items-center gap-2 mt-4">
                 <input

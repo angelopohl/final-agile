@@ -22,7 +22,6 @@ export default function DetallePrestamoPage() {
 
   // --- FUNCIÓN DE REDONDEO (0.05 -> 0.10, 0.04 -> 0.00) ---
   const redondearEfectivo = (valor) => {
-    // Redondea al décimo más cercano (0.10)
     return (Math.round(valor * 10) / 10).toFixed(2);
   };
 
@@ -78,8 +77,9 @@ export default function DetallePrestamoPage() {
         setMontoPagar(totalExacto.toFixed(2));
       }
     }
-  }, [medioPago]); // Se ejecuta cada vez que cambias el medio de pago
+  }, [medioPago]);
 
+  // --- AQUÍ ESTÁ EL CAMBIO DE LÓGICA DE MORA ---
   const calcularDesglosePago = (cuota) => {
     if (!cuota) return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
 
@@ -90,6 +90,8 @@ export default function DetallePrestamoPage() {
 
     const fechaVencimiento = new Date(cuota.dueDate);
     const hoy = new Date();
+
+    // Normalizamos horas para comparar solo fechas
     fechaVencimiento.setHours(0, 0, 0, 0);
     hoy.setHours(0, 0, 0, 0);
 
@@ -99,9 +101,15 @@ export default function DetallePrestamoPage() {
     let moraActiva = 0;
 
     if (capitalPendiente > 0.01 && diasAtraso > 0) {
-      const TASA_MENSUAL = 0.01;
-      const tasaDiaria = TASA_MENSUAL / 30;
-      moraActiva = capitalPendiente * tasaDiaria * diasAtraso;
+      const TASA_MENSUAL = 0.01; // 1% Fijo
+
+      // NUEVA LÓGICA: PERIODOS DE 30 DÍAS
+      // Math.ceil(1 / 30) = 1 periodo -> 1%
+      // Math.ceil(29 / 30) = 1 periodo -> 1%
+      // Math.ceil(31 / 30) = 2 periodos -> 2%
+      const periodosMora = Math.ceil(diasAtraso / 30);
+
+      moraActiva = capitalPendiente * TASA_MENSUAL * periodosMora;
     }
 
     const moraTotalGenerada = moraActiva + moraCongelada;
@@ -120,7 +128,6 @@ export default function DetallePrestamoPage() {
     setCuotaSeleccionada(cuota);
     const desglose = calcularDesglosePago(cuota);
 
-    // Por defecto inicia en EFECTIVO, así que aplicamos redondeo
     setMontoPagar(redondearEfectivo(desglose.total));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");

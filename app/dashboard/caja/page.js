@@ -35,8 +35,6 @@ export default function CuadreCajaPage() {
   const [descIngreso, setDescIngreso] = useState("");
 
   // --- FUNCIÓN DE REDONDEO ---
-  // 0.00 - 0.04 -> 0.00
-  // 0.05 - 0.09 -> 0.10
   const redondearEfectivo = (valor) => {
     return Math.round(valor * 10) / 10;
   };
@@ -82,7 +80,7 @@ export default function CuadreCajaPage() {
       const ventasTotalesRedondeadas = redondearEfectivo(vTotal);
 
       setResumen({
-        ventasTotal: ventasTotalesRedondeadas, // APLICADO AQUÍ TAMBIÉN
+        ventasTotal: ventasTotalesRedondeadas,
         ventasEfectivo: vEfectivo,
         ventasDigital: vDigital,
         ingresosExtra: vIngresosExtra,
@@ -178,6 +176,28 @@ export default function CuadreCajaPage() {
 
   const ingresarDinero = async () => {
     if (!montoIngreso || !descIngreso) return alert("Completa los datos");
+
+    const valor = Number(montoIngreso);
+
+    // --- VALIDACIÓN 1: LÍMITES ---
+    if (valor > 999999) {
+      return alert("El monto no puede superar 999,999.00");
+    }
+    if (valor <= 0) {
+      return alert("El monto debe ser mayor a 0");
+    }
+
+    // --- VALIDACIÓN 2: SOLO MÚLTIPLOS DE 0.10 ---
+    // Multiplicamos por 10. Si el resultado no es entero, tiene céntimos extra.
+    // Ej: 1.30 * 10 = 13 (Entero) -> OK
+    // Ej: 1.33 * 10 = 13.3 (Decimal) -> ERROR
+    // Usamos toFixed(1) para evitar errores de punto flotante (ej 1.2 * 3)
+    if ((valor * 10) % 1 !== 0) {
+      return alert(
+        "Solo se permiten montos múltiplos de 10 céntimos (Ej: 1.30, 5.50). No ingrese céntimos sueltos como 0.01 o 0.03."
+      );
+    }
+
     setProcesando(true);
     try {
       const res = await fetch("/api/caja", {
@@ -495,6 +515,8 @@ export default function CuadreCajaPage() {
                     onChange={(e) => setMontoIngreso(e.target.value)}
                     className="w-full pl-8 p-2 border rounded font-bold text-lg focus:ring-2 ring-green-500 outline-none"
                     placeholder="0.00"
+                    step="0.1" // Paso de 0.1 para sugerir múltiplos
+                    max="999999" // Límite en HTML
                   />
                 </div>
               </div>
