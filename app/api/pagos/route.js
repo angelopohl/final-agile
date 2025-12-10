@@ -128,7 +128,10 @@ export async function POST(request) {
       const nuevoCapitalPagado = (cuota.capitalPagado || 0) + pagoParaCapital;
       const nuevaMoraPagada = (cuota.moraPagada || 0) + pagoParaMora;
 
-      const isPaid = cuota.amount - nuevoCapitalPagado < 0.01;
+      // Considerar pagado si la diferencia es menor a 0.10 (margen de redondeo para efectivo)
+      const capitalRestante = cuota.amount - nuevoCapitalPagado;
+      const moraRestante = moraTotalGenerada - nuevaMoraPagada;
+      const isPaid = capitalRestante < 0.10 && moraRestante < 0.10;
 
       // Estado de la CUOTA (Este es solo visual para la tabla)
       const estadoCuota = isPaid

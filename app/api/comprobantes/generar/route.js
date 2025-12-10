@@ -346,10 +346,10 @@ export async function POST(req) {
     pdf.text("0", montoColX + montoColWidth - 5, lineY, { align: "right" });
     lineY += 5;
     
-    // 3. Cargos
+    // 3. Cargos (MORA)
     pdf.text("Cargos", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
-    pdf.text("0", montoColX + montoColWidth - 5, lineY, { align: "right" });
+    pdf.text(moraPagadaRedondeada.toFixed(2), montoColX + montoColWidth - 5, lineY, { align: "right" });
     lineY += 5;
     
     // 4. Valor de ventas operaciones exoneradas
