@@ -62,8 +62,26 @@ export default function DetallePrestamoPage() {
   };
 
   useEffect(() => {
-    if (id) fetchPrestamo();
-  }, [id]);
+    if (id) {
+      fetchPrestamo();
+      
+      // Verificar si viene de un pago exitoso
+      const pagoExitoso = searchParams.get('pagoExitoso');
+      const numeroCuotaPagada = searchParams.get('cuota');
+      
+      if (pagoExitoso === 'true' && numeroCuotaPagada && prestamo) {
+        const cuotaPagada = prestamo.cronograma.find(c => c.num === parseInt(numeroCuotaPagada));
+        if (cuotaPagada) {
+          const esRuc = prestamo.dniCliente && prestamo.dniCliente.length === 11;
+          if (esRuc) {
+            generarFactura(cuotaPagada);
+          } else {
+            generarComprobante(cuotaPagada);
+          }
+        }
+      }
+    }
+  }, [id, searchParams, prestamo]);
 
   // --- LÓGICA DE ACTUALIZACIÓN DE MONTO AL CAMBIAR MEDIO DE PAGO ---
   useEffect(() => {
@@ -101,15 +119,13 @@ export default function DetallePrestamoPage() {
     let moraActiva = 0;
 
     if (capitalPendiente > 0.01 && diasAtraso > 0) {
-      const TASA_MENSUAL = 0.01; // 1% Fijo
+      const TASA_MORA = 0.01; // 1% del monto de la cuota
 
-      // NUEVA LÓGICA: PERIODOS DE 30 DÍAS
-      // Math.ceil(1 / 30) = 1 periodo -> 1%
-      // Math.ceil(29 / 30) = 1 periodo -> 1%
-      // Math.ceil(31 / 30) = 2 periodos -> 2%
-      const periodosMora = Math.ceil(diasAtraso / 30);
-
-      moraActiva = capitalPendiente * TASA_MENSUAL * periodosMora;
+      // LÓGICA: 1% FIJO por cuota vencida
+      // Si vence 8/12 y pagas 8/12 -> diasAtraso=0, no cobra mora
+      // Si vence 8/12 y pagas 9/12 o después -> diasAtraso>0, cobra 1% fijo
+      // NO se acumula por meses, cada cuota tiene su propia mora del 1%
+      moraActiva = Number(cuota.amount) * TASA_MORA;
     }
 
     const moraTotalGenerada = moraActiva + moraCongelada;
@@ -183,6 +199,39 @@ export default function DetallePrestamoPage() {
     }
   };
 
+  const generarFactura = async (cuotaData) => {
+    try {
+      const res = await fetch("/api/facturas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prestamoId: prestamo.id,
+          numeroCuota: cuotaData.num,
+        }),
+      });
+
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `factura_${prestamo.id}_${cuotaData.num}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } else {
+        const errData = await res.json();
+        alert(
+          "Error al generar factura: " + (errData.error || "Desconocido")
+        );
+      }
+    } catch (e) {
+      console.error("Error generando la factura:", e);
+      alert("Error de conexión al generar la factura.");
+    }
+  };
+
   const confirmarPago = async () => {
     const montoNum = parseFloat(montoPagar);
 
@@ -249,7 +298,19 @@ export default function DetallePrestamoPage() {
         if (res.ok) {
           alert("Pago registrado correctamente.");
           setModalPagoOpen(false);
-          fetchPrestamo();
+          
+          // Generar factura o comprobante ANTES de actualizar los datos
+          const dniCliente = prestamo.dniCliente;
+          const esRuc = dniCliente && dniCliente.length === 11;
+          
+          if (esRuc) {
+            await generarFactura(cuotaSeleccionada);
+          } else {
+            await generarComprobante(cuotaSeleccionada);
+          }
+          
+          // Actualizar los datos del préstamo después
+          await fetchPrestamo();
         } else {
           alert("Error: " + data.message);
         }

@@ -143,8 +143,8 @@ export async function POST(req) {
       return Math.round(valor * 10) / 10;
     };
 
-    // Calcular componentes del pago con redondeo
-    const interesPagado = redondearADecima(Math.min(capitalPagado, interesOriginal));
+    // Calcular componentes del pago - SIN redondear el interés
+    const interesPagado = Math.min(capitalPagado, interesOriginal); // Sin redondeo
     const amortizacionPagada = redondearADecima(capitalPagado - Math.min(capitalPagado, interesOriginal));
     const moraPagadaRedondeada = redondearADecima(moraPagada);
     

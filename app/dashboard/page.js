@@ -25,8 +25,8 @@ export default function DashboardPage() {
 
   const buscarPrestamos = async (e) => {
     e.preventDefault();
-    if (dniBusqueda.length !== 8) {
-      setMensaje("Ingrese un DNI de 8 dígitos");
+    if (dniBusqueda.length !== 8 && dniBusqueda.length !== 11) {
+      setMensaje("Ingrese un DNI (8 dígitos) o RUC (11 dígitos)");
       return;
     }
     setLoading(true);
@@ -85,9 +85,9 @@ export default function DashboardPage() {
         <form onSubmit={buscarPrestamos} className="flex gap-4">
           <input
             type="text"
-            placeholder="DNI del cliente..."
+            placeholder="DNI (8 dígitos) o RUC (11 dígitos)..."
             className="flex-1 border p-3 rounded-lg outline-none focus:border-blue-500"
-            maxLength={8}
+            maxLength={11}
             value={dniBusqueda}
             onChange={(e) => setDniBusqueda(e.target.value.replace(/\D/g, ""))}
           />

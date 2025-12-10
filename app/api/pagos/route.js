@@ -69,10 +69,11 @@ export async function POST(request) {
         const diff = hoy - fechaVencimiento;
         diasAtraso = Math.ceil(diff / msPorDia);
 
-        // Tasa diaria basada en 1% mensual (Tu fórmula correcta)
-        const tasaDiaria = 0.01 / 30;
-
-        moraActiva = capitalPendiente * tasaDiaria * diasAtraso;
+        // LÓGICA: 1% FIJO por cuota vencida
+        // Si la cuota está vencida (diasAtraso > 0), cobra 1% del monto de la cuota
+        // NO se acumula por meses, es un cargo fijo del 1% por cuota vencida
+        const TASA_MORA = 0.01;
+        moraActiva = cuota.amount * TASA_MORA;
       }
 
       // Mora Total Generada = Lo activo hoy + Lo histórico congelado
@@ -116,18 +117,13 @@ export async function POST(request) {
       }
 
       // ============================
-      // 4. LÓGICA DE CONGELAMIENTO (La clave que evita errores futuros)
+      // 4. LÓGICA DE CONGELAMIENTO (Simplificada para mora por cuota)
       // ============================
       let nuevaMoraCongelada = moraCongeladaPrevia;
 
-      if (pagoParaCapital > 0 && diasAtraso > 0) {
-        // Calculamos cuánta mora corresponde EXACTAMENTE al capital que estamos matando
-        const tasaDiaria = 0.01 / 30;
-        const moraDelCapitalPagado = pagoParaCapital * tasaDiaria * diasAtraso;
-
-        // La sumamos al acumulado histórico
-        nuevaMoraCongelada += moraDelCapitalPagado;
-      }
+      // Con el nuevo modelo, la mora se calcula directamente sobre el monto de cuota
+      // No necesitamos congelar mora proporcional al capital pagado
+      // La mora se paga completa o se acumula
 
       const nuevoCapitalPagado = (cuota.capitalPagado || 0) + pagoParaCapital;
       const nuevaMoraPagada = (cuota.moraPagada || 0) + pagoParaMora;
