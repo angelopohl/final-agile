@@ -7,59 +7,86 @@ import {
   Lock,
   Unlock,
   Printer,
+  PlusCircle,
+  X,
 } from "lucide-react";
 
 export default function CuadreCajaPage() {
-  // Datos
   const [loading, setLoading] = useState(true);
-  const [sesion, setSesion] = useState(null); // null, { estado: 'ABIERTA' }, { estado: 'CERRADA' }
+  const [sesion, setSesion] = useState(null);
   const [movimientos, setMovimientos] = useState([]);
 
-  // Totales calculados
+  // Totales
   const [resumen, setResumen] = useState({
     ventasTotal: 0,
     ventasEfectivo: 0,
     ventasDigital: 0,
-    totalEnCaja: 0, // (Inicial + Ventas Efectivo)
+    ingresosExtra: 0,
+    totalEnCaja: 0,
   });
 
-  // Inputs formularios
+  // Inputs Apertura
   const [montoInicialInput, setMontoInicialInput] = useState("");
   const [procesando, setProcesando] = useState(false);
+
+  // Inputs Ingreso Dinero
+  const [modalIngresoOpen, setModalIngresoOpen] = useState(false);
+  const [montoIngreso, setMontoIngreso] = useState("");
+  const [descIngreso, setDescIngreso] = useState("");
+
+  // --- FUNCIÓN DE REDONDEO ---
+  // 0.00 - 0.04 -> 0.00
+  // 0.05 - 0.09 -> 0.10
+  const redondearEfectivo = (valor) => {
+    return Math.round(valor * 10) / 10;
+  };
 
   const fetchCaja = async () => {
     try {
       setLoading(true);
       const res = await fetch("/api/caja");
-      const data = await res.json(); // { sesion, pagos }
+      const data = await res.json();
 
       if (data.error) throw new Error(data.error);
 
       setSesion(data.sesion);
       setMovimientos(data.pagos || []);
 
-      // Calcular totales
       let vTotal = 0;
       let vEfectivo = 0;
       let vDigital = 0;
+      let vIngresosExtra = 0;
 
       (data.pagos || []).forEach((p) => {
-        const monto = Number(p.montoTotal || 0);
-        vTotal += monto;
-        if (p.medioPago === "EFECTIVO") {
-          vEfectivo += monto;
-        } else {
-          vDigital += monto;
+        if (p.tipo === "PAGO") {
+          const monto = Number(p.montoTotal || 0);
+          vTotal += monto;
+          if (p.medioPago === "EFECTIVO") {
+            vEfectivo += monto;
+          } else {
+            vDigital += monto;
+          }
+        } else if (p.tipo === "INGRESO") {
+          const monto = Number(p.monto || 0);
+          vIngresosExtra += monto;
         }
       });
 
       const inicio = data.sesion ? Number(data.sesion.montoInicial || 0) : 0;
 
+      // Calculamos el matemático exacto
+      const cajaMatematica = inicio + vEfectivo + vIngresosExtra;
+
+      // Aplicamos el redondeo a la Caja y a las Ventas Totales
+      const cajaRedondeada = redondearEfectivo(cajaMatematica);
+      const ventasTotalesRedondeadas = redondearEfectivo(vTotal);
+
       setResumen({
-        ventasTotal: vTotal,
+        ventasTotal: ventasTotalesRedondeadas, // APLICADO AQUÍ TAMBIÉN
         ventasEfectivo: vEfectivo,
         ventasDigital: vDigital,
-        totalEnCaja: inicio + vEfectivo, // La fórmula clave
+        ingresosExtra: vIngresosExtra,
+        totalEnCaja: cajaRedondeada,
       });
     } catch (error) {
       console.error("Error cargando caja:", error);
@@ -74,7 +101,6 @@ export default function CuadreCajaPage() {
 
   // --- ACCIONES ---
 
-  // NUEVA FUNCIÓN: DESCARGAR PDF
   const descargarReporte = async () => {
     try {
       const res = await fetch("/api/caja/reporte");
@@ -96,7 +122,7 @@ export default function CuadreCajaPage() {
       }
     } catch (error) {
       console.error(error);
-      alert("Error de conexión al generar reporte");
+      alert("Error de conexión");
     }
   };
 
@@ -114,7 +140,7 @@ export default function CuadreCajaPage() {
       });
       if (res.ok) {
         setMontoInicialInput("");
-        fetchCaja(); // Recargar todo
+        fetchCaja();
       } else {
         alert("Error al abrir caja");
       }
@@ -135,7 +161,7 @@ export default function CuadreCajaPage() {
         body: JSON.stringify({
           action: "CERRAR",
           sesionId: sesion.id,
-          montoFinal: resumen.totalEnCaja, // Guardamos lo que debería haber
+          montoFinal: resumen.totalEnCaja,
         }),
       });
       if (res.ok) {
@@ -150,12 +176,38 @@ export default function CuadreCajaPage() {
     }
   };
 
+  const ingresarDinero = async () => {
+    if (!montoIngreso || !descIngreso) return alert("Completa los datos");
+    setProcesando(true);
+    try {
+      const res = await fetch("/api/caja", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "INGRESO",
+          montoIngreso: montoIngreso,
+          descripcionIngreso: descIngreso,
+        }),
+      });
+      if (res.ok) {
+        setModalIngresoOpen(false);
+        setMontoIngreso("");
+        setDescIngreso("");
+        fetchCaja();
+      } else {
+        alert("Error al registrar ingreso");
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setProcesando(false);
+    }
+  };
+
   if (loading)
     return <p className="p-8 text-center text-gray-500">Cargando Caja...</p>;
 
-  // ----------------------------------------------------
-  // CASO 1: CAJA CERRADA / NO INICIADA -> FORMULARIO
-  // ----------------------------------------------------
+  // CASO 1: CAJA CERRADA / NO INICIADA
   if (!sesion) {
     return (
       <div className="max-w-md mx-auto mt-10 bg-white p-8 rounded-xl shadow-lg border border-gray-100 text-center">
@@ -165,11 +217,6 @@ export default function CuadreCajaPage() {
         <h1 className="text-2xl font-bold text-gray-800 mb-2">
           Apertura de Caja
         </h1>
-        <p className="text-gray-500 mb-6 text-sm">
-          Ingresa el dinero base (sencillo) para iniciar las operaciones del
-          día.
-        </p>
-
         <div className="mb-6 text-left">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Monto Inicial (Efectivo)
@@ -185,7 +232,6 @@ export default function CuadreCajaPage() {
             />
           </div>
         </div>
-
         <button
           onClick={abrirCaja}
           disabled={procesando}
@@ -197,9 +243,7 @@ export default function CuadreCajaPage() {
     );
   }
 
-  // ----------------------------------------------------
-  // CASO 2: CAJA YA CERRADA (FIN DEL DÍA)
-  // ----------------------------------------------------
+  // CASO 2: CAJA YA CERRADA
   if (sesion.estado === "CERRADA") {
     return (
       <div className="max-w-2xl mx-auto mt-10 bg-gray-50 p-8 rounded-xl border border-gray-200 text-center">
@@ -210,7 +254,6 @@ export default function CuadreCajaPage() {
         <p className="text-gray-500 mt-2">
           La sesión del día <b>{sesion.fecha}</b> ha finalizado.
         </p>
-
         <div className="grid grid-cols-2 gap-4 mt-8 max-w-md mx-auto">
           <div className="bg-white p-4 rounded shadow-sm">
             <p className="text-xs text-gray-400 uppercase">Monto Inicial</p>
@@ -225,8 +268,6 @@ export default function CuadreCajaPage() {
             </p>
           </div>
         </div>
-
-        {/* Botón para imprimir el reporte incluso si ya está cerrada */}
         <div className="mt-6">
           <button
             onClick={descargarReporte}
@@ -240,12 +281,10 @@ export default function CuadreCajaPage() {
     );
   }
 
-  // ----------------------------------------------------
-  // CASO 3: CAJA ABIERTA (DASHBOARD)
-  // ----------------------------------------------------
+  // CASO 3: CAJA ABIERTA
   return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-start">
+    <div className="space-y-8 relative">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
             <Banknote className="text-green-600" size={32} />
@@ -257,14 +296,21 @@ export default function CuadreCajaPage() {
           </p>
         </div>
 
-        {/* GRUPO DE BOTONES DE ACCIÓN */}
         <div className="flex gap-2">
+          <button
+            onClick={() => setModalIngresoOpen(true)}
+            className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm font-medium shadow-sm"
+          >
+            <PlusCircle size={16} />
+            Ingresar Dinero
+          </button>
+
           <button
             onClick={descargarReporte}
             className="flex items-center gap-2 bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 text-sm font-medium shadow-sm"
           >
             <Printer size={16} />
-            Exportar PDF
+            Exportar
           </button>
 
           <button
@@ -272,36 +318,35 @@ export default function CuadreCajaPage() {
             disabled={procesando}
             className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg hover:bg-red-100 text-sm font-medium"
           >
-            Cerrar Caja
+            Cerrar
           </button>
         </div>
       </div>
 
-      {/* Tarjetas Resumen */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* TARJETA 1: DINERO REAL EN CAJA (Lo más importante) */}
-        <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-green-600 relative overflow-hidden">
+      {/* Tarjetas Resumen - 4 COLUMNAS */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 1. EFECTIVO EN CAJÓN (Redondeado) */}
+        <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-600 relative overflow-hidden">
           <div className="relative z-10">
-            <p className="text-sm text-gray-500 uppercase font-bold tracking-wide">
+            <p className="text-xs text-gray-500 uppercase font-bold tracking-wide">
               Efectivo en Cajón
             </p>
-            <h2 className="text-4xl font-extrabold text-gray-800 mt-2">
+            <h2 className="text-3xl font-extrabold text-gray-800 mt-1">
               S/ {resumen.totalEnCaja.toFixed(2)}
             </h2>
-            <div className="mt-2 text-xs text-green-700 bg-green-50 inline-block px-2 py-1 rounded">
-              Base (S/ {sesion.montoInicial}) + Ventas (S/{" "}
-              {resumen.ventasEfectivo.toFixed(2)})
+            <div className="mt-1 text-[10px] text-green-700 bg-green-50 inline-block px-2 py-1 rounded">
+              (Redondeado)
             </div>
           </div>
-          <div className="absolute right-4 top-6 text-green-100 opacity-50">
-            <Banknote size={80} />
+          <div className="absolute right-2 top-4 text-green-100 opacity-50">
+            <Banknote size={60} />
           </div>
         </div>
 
-        {/* TARJETA 2: VENTAS TOTALES (Rendimiento) */}
-        <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-blue-600">
-          <div className="flex justify-between items-center mb-2">
-            <p className="text-sm text-gray-500 uppercase font-bold">
+        {/* 2. VENTAS TOTALES (AHORA REDONDEADO) */}
+        <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-blue-600">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-xs text-gray-500 uppercase font-bold">
               Ventas Totales
             </p>
             <Wallet className="text-blue-500 opacity-50" size={20} />
@@ -309,13 +354,16 @@ export default function CuadreCajaPage() {
           <h2 className="text-3xl font-bold text-blue-700">
             S/ {resumen.ventasTotal.toFixed(2)}
           </h2>
-          <p className="text-xs text-gray-400 mt-1">Incluye Digitales</p>
+          {/* Etiqueta visual agregada para coherencia */}
+          <div className="mt-1 text-[10px] text-blue-700 bg-blue-50 inline-block px-2 py-1 rounded">
+            (Redondeado)
+          </div>
         </div>
 
-        {/* TARJETA 3: DIGITALES (Banco) */}
-        <div className="bg-white p-6 rounded-xl shadow-md border-l-4 border-purple-500">
-          <div className="flex justify-between items-center mb-2">
-            <p className="text-sm text-gray-500 uppercase font-bold">
+        {/* 3. VENTAS DIGITALES */}
+        <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-purple-500">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-xs text-gray-500 uppercase font-bold">
               Bancos / Digital
             </p>
             <Smartphone className="text-purple-500 opacity-50" size={20} />
@@ -323,9 +371,21 @@ export default function CuadreCajaPage() {
           <h2 className="text-3xl font-bold text-purple-700">
             S/ {resumen.ventasDigital.toFixed(2)}
           </h2>
-          <p className="text-xs text-gray-400 mt-1">
-            Yape, Tarjetas, Transferencias
-          </p>
+          <p className="text-[10px] text-gray-400 mt-1">Yape, Tarjetas</p>
+        </div>
+
+        {/* 4. INGRESOS EXTRA */}
+        <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-yellow-500">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-xs text-gray-500 uppercase font-bold">
+              Ingresos Extra
+            </p>
+            <PlusCircle className="text-yellow-500 opacity-50" size={20} />
+          </div>
+          <h2 className="text-3xl font-bold text-yellow-700">
+            S/ {resumen.ingresosExtra.toFixed(2)}
+          </h2>
+          <p className="text-[10px] text-gray-400 mt-1">Sencillo manual</p>
         </div>
       </div>
 
@@ -341,7 +401,7 @@ export default function CuadreCajaPage() {
         {movimientos.length === 0 ? (
           <div className="p-12 text-center">
             <p className="text-gray-400 text-lg">
-              Caja abierta, esperando clientes...
+              Caja abierta, esperando movimientos...
             </p>
           </div>
         ) : (
@@ -349,53 +409,118 @@ export default function CuadreCajaPage() {
             <thead className="bg-gray-100 text-gray-600 uppercase text-xs">
               <tr>
                 <th className="p-4">Hora</th>
-                <th className="p-4">Cliente</th>
+                <th className="p-4">Cliente / Tipo</th>
                 <th className="p-4">Detalle</th>
                 <th className="p-4 text-center">Medio</th>
                 <th className="p-4 text-right">Monto</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {movimientos.map((m) => (
-                <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="p-4 font-mono text-gray-500">
-                    {new Date(m.fechaRegistro).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      timeZone: "America/Lima", // Forzamos visualización correcta
-                    })}
-                  </td>
-                  <td className="p-4 text-gray-700 font-medium">
-                    {m.dniCliente}
-                  </td>
-                  <td className="p-4 text-gray-600">
-                    Cuota {m.numeroCuota}
-                    {m.desglose?.mora > 0 && (
-                      <span className="ml-2 text-[10px] text-red-600 bg-red-50 px-1 py-0.5 rounded border border-red-100">
-                        MORA
+              {movimientos.map((m) => {
+                const esPago = m.tipo === "PAGO";
+                return (
+                  <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="p-4 font-mono text-gray-500">
+                      {new Date(m.fechaRegistro).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: "America/Lima",
+                      })}
+                    </td>
+                    <td className="p-4 font-medium text-gray-700">
+                      {esPago ? (
+                        m.dniCliente
+                      ) : (
+                        <span className="text-blue-600 font-bold">
+                          INGRESO CAJA
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-4 text-gray-600">
+                      {esPago ? (
+                        <>
+                          Cuota {m.numeroCuota}{" "}
+                          {m.desglose?.mora > 0 && (
+                            <span className="text-red-500 text-xs">(Mora)</span>
+                          )}
+                        </>
+                      ) : (
+                        m.descripcion
+                      )}
+                    </td>
+                    <td className="p-4 text-center">
+                      <span
+                        className={`px-2 py-1 text-[10px] font-bold rounded-full uppercase tracking-wide ${
+                          m.medioPago === "EFECTIVO" || !esPago
+                            ? "bg-green-100 text-green-700 border border-green-200"
+                            : "bg-purple-100 text-purple-700 border border-purple-200"
+                        }`}
+                      >
+                        {m.medioPago || "EFECTIVO"}
                       </span>
-                    )}
-                  </td>
-                  <td className="p-4 text-center">
-                    <span
-                      className={`px-2 py-1 text-[10px] font-bold rounded-full uppercase tracking-wide ${
-                        m.medioPago === "EFECTIVO"
-                          ? "bg-green-100 text-green-700 border border-green-200"
-                          : "bg-purple-100 text-purple-700 border border-purple-200"
-                      }`}
-                    >
-                      {m.medioPago}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right font-bold text-gray-800">
-                    S/ {Number(m.montoTotal || 0).toFixed(2)}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="p-4 text-right font-bold text-gray-800">
+                      S/ {Number(esPago ? m.montoTotal : m.monto).toFixed(2)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* MODAL DE INGRESO DINERO */}
+      {modalIngresoOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="bg-green-600 p-4 flex justify-between items-center text-white">
+              <h3 className="font-bold">Ingresar Dinero a Caja</h3>
+              <button onClick={() => setModalIngresoOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-sm text-gray-600 font-medium">
+                  Monto a Ingresar
+                </label>
+                <div className="relative mt-1">
+                  <span className="absolute left-3 top-3 text-gray-400">
+                    S/
+                  </span>
+                  <input
+                    type="number"
+                    value={montoIngreso}
+                    onChange={(e) => setMontoIngreso(e.target.value)}
+                    className="w-full pl-8 p-2 border rounded font-bold text-lg focus:ring-2 ring-green-500 outline-none"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm text-gray-600 font-medium">
+                  Motivo / Descripción
+                </label>
+                <input
+                  type="text"
+                  value={descIngreso}
+                  onChange={(e) => setDescIngreso(e.target.value)}
+                  className="w-full mt-1 p-2 border rounded focus:ring-2 ring-green-500 outline-none"
+                  placeholder="Ej. Sencillo para vueltos"
+                />
+              </div>
+              <button
+                onClick={ingresarDinero}
+                disabled={procesando}
+                className="w-full bg-green-600 text-white font-bold py-3 rounded hover:bg-green-700 transition-colors"
+              >
+                {procesando ? "Guardando..." : "Confirmar Ingreso"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

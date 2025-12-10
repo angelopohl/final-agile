@@ -10,7 +10,6 @@ import {
   limit,
 } from "firebase/firestore";
 
-// Función para obtener la fecha de hoy en Perú
 const getFechaPeru = () => {
   const ahora = new Date().toLocaleString("en-US", {
     timeZone: "America/Lima",
@@ -26,7 +25,7 @@ export async function GET() {
   try {
     const hoyStr = getFechaPeru();
 
-    // 1. OBTENER DATOS DE LA SESIÓN
+    // 1. OBTENER SESIÓN
     const sesionesRef = collection(db, "sesiones_caja");
     const qSesion = query(sesionesRef, where("fecha", "==", hoyStr), limit(1));
     const sesionSnap = await getDocs(qSesion);
@@ -37,7 +36,7 @@ export async function GET() {
       sesion = { id: d.id, ...d.data() };
     }
 
-    // 2. OBTENER LOS PAGOS DE HOY
+    // 2. OBTENER PAGOS (COBROS)
     const pagosRef = collection(db, "pagos");
     const qPagos = query(
       pagosRef,
@@ -46,43 +45,71 @@ export async function GET() {
     );
     const pagosSnap = await getDocs(qPagos);
 
-    const pagosHoy = [];
+    const movimientosHoy = [];
     let ventasEfectivo = 0;
     let ventasDigital = 0;
+    let ingresosExtraTotal = 0;
 
+    // Procesar Pagos
     pagosSnap.forEach((doc) => {
       const data = doc.data();
-      // Filtrar por fecha Perú
       const fechaPagoPeru = new Date(data.fechaRegistro).toLocaleString(
         "en-US",
         {
           timeZone: "America/Lima",
         }
       );
-      const fechaPagoObj = new Date(fechaPagoPeru);
-      const year = fechaPagoObj.getFullYear();
-      const month = String(fechaPagoObj.getMonth() + 1).padStart(2, "0");
-      const day = String(fechaPagoObj.getDate()).padStart(2, "0");
-      const fechaPagoStr = `${year}-${month}-${day}`;
+      const fechaObj = new Date(fechaPagoPeru);
+      const year = fechaObj.getFullYear();
+      const month = String(fechaObj.getMonth() + 1).padStart(2, "0");
+      const day = String(fechaObj.getDate()).padStart(2, "0");
 
-      if (fechaPagoStr === hoyStr) {
+      if (`${year}-${month}-${day}` === hoyStr) {
         const monto = parseFloat(data.montoTotal || 0);
-        pagosHoy.push({ id: doc.id, ...data });
+        movimientosHoy.push({ id: doc.id, ...data, tipo: "PAGO" });
 
         if (data.medioPago === "EFECTIVO") ventasEfectivo += monto;
         else ventasDigital += monto;
       }
     });
 
+    // 3. OBTENER INGRESOS EXTRA
+    const ingresosRef = collection(db, "ingresos_extra");
+    const ingresosSnap = await getDocs(ingresosRef);
+
+    ingresosSnap.forEach((doc) => {
+      const data = doc.data();
+      const fechaPeru = new Date(data.fechaRegistro).toLocaleString("en-US", {
+        timeZone: "America/Lima",
+      });
+      const fechaObj = new Date(fechaPeru);
+      const year = fechaObj.getFullYear();
+      const month = String(fechaObj.getMonth() + 1).padStart(2, "0");
+      const day = String(fechaObj.getDate()).padStart(2, "0");
+
+      if (`${year}-${month}-${day}` === hoyStr) {
+        const monto = parseFloat(data.monto || 0);
+        movimientosHoy.push({ id: doc.id, ...data, tipo: "INGRESO" });
+        ingresosExtraTotal += monto;
+      }
+    });
+
+    // Ordenar cronológicamente
+    movimientosHoy.sort(
+      (a, b) => new Date(a.fechaRegistro) - new Date(b.fechaRegistro)
+    ); // Ascendente para el reporte impreso
+
     const montoInicial = sesion ? parseFloat(sesion.montoInicial || 0) : 0;
-    const efectivoEnCaja = montoInicial + ventasEfectivo;
+
+    // FÓRMULA FINAL: (Base + Ventas Efectivo + Ingresos Extra)
+    const efectivoEnCaja = montoInicial + ventasEfectivo + ingresosExtraTotal;
     const ventasTotales = ventasEfectivo + ventasDigital;
 
-    // 3. GENERAR EL PDF
+    // --- GENERAR PDF ---
     const pdf = new jsPDF();
     pdf.setFont("helvetica", "normal");
 
-    // -- Encabezado --
+    // Encabezado
     pdf.setFontSize(16);
     pdf.setFont(undefined, "bold");
     pdf.text("REPORTE DE CIERRE DE CAJA", 105, 20, { align: "center" });
@@ -99,32 +126,34 @@ export async function GET() {
       { align: "center" }
     );
 
-    // -- Cuadros de Resumen --
     let y = 45;
 
-    // Cuadro Izquierdo: Estado
+    // RESUMEN
+    // Caja Izquierda: Estado
     pdf.setDrawColor(0);
     pdf.setFillColor(245, 245, 245);
-    pdf.rect(14, y, 85, 35, "F");
-    pdf.rect(14, y, 85, 35);
+    pdf.rect(14, y, 85, 40, "F");
+    pdf.rect(14, y, 85, 40);
 
     pdf.setFont(undefined, "bold");
     pdf.text("ESTADO DE CAJA", 20, y + 8);
     pdf.setFont(undefined, "normal");
     pdf.text(`Estado: ${sesion?.estado || "NO APERTURADA"}`, 20, y + 16);
     pdf.text(`Apertura (Base): S/ ${montoInicial.toFixed(2)}`, 20, y + 24);
+    pdf.text(`Ingresos Extra: S/ ${ingresosExtraTotal.toFixed(2)}`, 20, y + 32); // Nuevo campo
+
     if (sesion?.estado === "CERRADA") {
       pdf.text(
         `Cierre Final: S/ ${parseFloat(sesion.montoFinal || 0).toFixed(2)}`,
         20,
-        y + 32
+        y + 39
       );
     }
 
-    // Cuadro Derecho: Totales
+    // Caja Derecha: Totales
     pdf.setFillColor(240, 255, 240);
-    pdf.rect(110, y, 85, 35, "F");
-    pdf.rect(110, y, 85, 35);
+    pdf.rect(110, y, 85, 40, "F");
+    pdf.rect(110, y, 85, 40);
 
     pdf.setFont(undefined, "bold");
     pdf.text("EFECTIVO REAL EN CAJÓN", 116, y + 8);
@@ -132,21 +161,20 @@ export async function GET() {
     pdf.text(`S/ ${efectivoEnCaja.toFixed(2)}`, 116, y + 20);
     pdf.setFontSize(10);
     pdf.setFont(undefined, "normal");
-    pdf.text(`(Base + Ventas Efectivo)`, 116, y + 28);
+    pdf.text(`(Base + Cobros + Ingresos)`, 116, y + 28);
 
-    y += 50;
+    y += 55;
 
-    // -- Tabla de Movimientos --
+    // TABLA
     pdf.setFont(undefined, "bold");
     pdf.text("DETALLE DE MOVIMIENTOS", 14, y);
     y += 5;
 
-    // Cabecera
     pdf.setFillColor(220, 220, 220);
     pdf.rect(14, y, 182, 8, "F");
     pdf.setFontSize(9);
     pdf.text("HORA", 16, y + 5);
-    pdf.text("CLIENTE (DNI)", 40, y + 5);
+    pdf.text("CLIENTE / TIPO", 40, y + 5);
     pdf.text("DESCRIPCIÓN", 85, y + 5);
     pdf.text("MEDIO", 145, y + 5);
     pdf.text("MONTO", 192, y + 5, { align: "right" });
@@ -154,34 +182,47 @@ export async function GET() {
     y += 10;
     pdf.setFont(undefined, "normal");
 
-    // Filas
-    pagosHoy.forEach((p, index) => {
+    movimientosHoy.forEach((m, index) => {
       if (y > 270) {
         pdf.addPage();
         y = 20;
       }
 
-      const hora = new Date(p.fechaRegistro).toLocaleTimeString("en-US", {
+      const hora = new Date(m.fechaRegistro).toLocaleTimeString("en-US", {
         timeZone: "America/Lima",
         hour: "2-digit",
         minute: "2-digit",
       });
-      const monto = parseFloat(p.montoTotal).toFixed(2);
 
-      // Color alternado
+      // Lógica de visualización según tipo
+      let cliente = "-";
+      let desc = "";
+      let monto = 0;
+      let medio = "EFECTIVO";
+
+      if (m.tipo === "PAGO") {
+        cliente = m.dniCliente;
+        desc = `Cuota ${m.numeroCuota}`;
+        if (m.desglose?.mora > 0) desc += " (+Mora)";
+        monto = parseFloat(m.montoTotal).toFixed(2);
+        medio = m.medioPago;
+      } else {
+        // Es un ingreso extra
+        cliente = "INGRESO CAJA";
+        desc = m.descripcion || "Ingreso manual";
+        monto = parseFloat(m.monto).toFixed(2);
+        medio = "EFECTIVO";
+      }
+
       if (index % 2 === 0) {
         pdf.setFillColor(250, 250, 250);
         pdf.rect(14, y - 4, 182, 8, "F");
       }
 
       pdf.text(hora, 16, y);
-      pdf.text(p.dniCliente || "-", 40, y);
-
-      let desc = `Cuota ${p.numeroCuota}`;
-      if (p.desglose?.mora > 0) desc += " (+Mora)";
-      pdf.text(desc, 85, y);
-
-      pdf.text(p.medioPago.substring(0, 16), 145, y);
+      pdf.text(cliente, 40, y);
+      pdf.text(desc.substring(0, 30), 85, y);
+      pdf.text(medio.substring(0, 16), 145, y);
       pdf.text(monto, 192, y, { align: "right" });
 
       y += 8;
@@ -190,15 +231,20 @@ export async function GET() {
     pdf.line(14, y, 196, y);
     y += 8;
 
+    // Totales pie
     pdf.setFont(undefined, "bold");
+    pdf.text(`TOTAL COBROS (Ventas): S/ ${ventasTotales.toFixed(2)}`, 192, y, {
+      align: "right",
+    });
+    y += 5;
     pdf.text(
-      `TOTAL VENTAS (Inc. Digital):  S/ ${ventasTotales.toFixed(2)}`,
+      `TOTAL INGRESOS EXTRA: S/ ${ingresosExtraTotal.toFixed(2)}`,
       192,
       y,
       { align: "right" }
     );
 
-    // -- Firma --
+    // Firma
     y = 260;
     pdf.setLineWidth(0.5);
     pdf.line(70, y, 140, y);
@@ -206,7 +252,6 @@ export async function GET() {
     pdf.setFont(undefined, "normal");
     pdf.text("Firma del Responsable de Caja", 105, y + 5, { align: "center" });
 
-    // RETORNAR EL PDF
     const pdfBuffer = pdf.output("arraybuffer");
 
     return new Response(pdfBuffer, {

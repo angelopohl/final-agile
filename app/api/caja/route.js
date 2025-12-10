@@ -38,7 +38,7 @@ export async function GET() {
       sesionData = { id: d.id, ...d.data() };
     }
 
-    // 2. BUSCAR PAGOS
+    // 2. BUSCAR PAGOS (COBROS DE PRÉSTAMOS)
     const pagosRef = collection(db, "pagos");
     const qPagos = query(
       pagosRef,
@@ -47,7 +47,8 @@ export async function GET() {
     );
     const pagosSnap = await getDocs(qPagos);
 
-    const pagosHoy = [];
+    const movimientosHoy = [];
+
     pagosSnap.forEach((doc) => {
       const data = doc.data();
       const fechaPagoPeru = new Date(data.fechaRegistro).toLocaleString(
@@ -63,13 +64,43 @@ export async function GET() {
       const fechaPagoStr = `${year}-${month}-${day}`;
 
       if (fechaPagoStr === hoyStr) {
-        pagosHoy.push({ id: doc.id, ...data });
+        // Marcamos el tipo para el frontend
+        movimientosHoy.push({ id: doc.id, ...data, tipo: "PAGO" });
       }
     });
 
+    // 3. BUSCAR INGRESOS EXTRA (DINERO MANUAL)
+    const ingresosRef = collection(db, "ingresos_extra");
+    // Filtramos en memoria igual que pagos para asegurar fecha exacta
+    const ingresosSnap = await getDocs(ingresosRef);
+
+    ingresosSnap.forEach((doc) => {
+      const data = doc.data();
+      const fechaIngresoPeru = new Date(data.fechaRegistro).toLocaleString(
+        "en-US",
+        {
+          timeZone: "America/Lima",
+        }
+      );
+      const fechaObj = new Date(fechaIngresoPeru);
+      const year = fechaObj.getFullYear();
+      const month = String(fechaObj.getMonth() + 1).padStart(2, "0");
+      const day = String(fechaObj.getDate()).padStart(2, "0");
+      const fechaStr = `${year}-${month}-${day}`;
+
+      if (fechaStr === hoyStr) {
+        movimientosHoy.push({ id: doc.id, ...data, tipo: "INGRESO" });
+      }
+    });
+
+    // 4. ORDENAR TODO POR FECHA (MÁS RECIENTE PRIMERO)
+    movimientosHoy.sort(
+      (a, b) => new Date(b.fechaRegistro) - new Date(a.fechaRegistro)
+    );
+
     return NextResponse.json({
       sesion: sesionData,
-      pagos: pagosHoy,
+      pagos: movimientosHoy, // Enviamos la lista combinada
     });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -79,9 +110,17 @@ export async function GET() {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { action, montoInicial, montoFinal, sesionId } = body;
+    const {
+      action,
+      montoInicial,
+      montoFinal,
+      sesionId,
+      montoIngreso,
+      descripcionIngreso,
+    } = body;
     const hoyStr = getFechaPeru();
 
+    // --- ABRIR CAJA ---
     if (action === "ABRIR") {
       const sesionesRef = collection(db, "sesiones_caja");
       const q = query(sesionesRef, where("fecha", "==", hoyStr));
@@ -107,6 +146,7 @@ export async function POST(req) {
       return NextResponse.json({ ok: true, id: docRef.id });
     }
 
+    // --- CERRAR CAJA ---
     if (action === "CERRAR") {
       if (!sesionId)
         return NextResponse.json(
@@ -119,6 +159,28 @@ export async function POST(req) {
         montoFinal: parseFloat(montoFinal || 0),
         fechaCierre: new Date().toISOString(),
       });
+      return NextResponse.json({ ok: true });
+    }
+
+    // --- NUEVO: INGRESAR DINERO EXTRA ---
+    if (action === "INGRESO") {
+      if (!montoIngreso || !descripcionIngreso) {
+        return NextResponse.json(
+          { error: "Faltan datos de ingreso" },
+          { status: 400 }
+        );
+      }
+
+      const ingresosRef = collection(db, "ingresos_extra");
+      const nuevoIngreso = {
+        monto: parseFloat(montoIngreso),
+        descripcion: descripcionIngreso,
+        fechaRegistro: new Date().toISOString(), // Se guarda en UTC, el GET lo convierte
+        usuario: "admin",
+        medioPago: "EFECTIVO", // Asumimos efectivo para caja chica
+      };
+
+      await addDoc(ingresosRef, nuevoIngreso);
       return NextResponse.json({ ok: true });
     }
 
