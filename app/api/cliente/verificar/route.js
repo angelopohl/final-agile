@@ -1,44 +1,66 @@
-// app/api/cliente/verificar/route.js
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
+// IMPORTANTE: Importar el servicio de SUNAT
 import { consultarDniReniec } from "@/services/reniecService";
+import { consultarRucSunat } from "@/services/sunatService";
 
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { dni } = body;
+    const documento = body.dni || body.documento;
 
     // 1. Validación básica
-    if (!dni || dni.length !== 8) {
+    if (!documento || (documento.length !== 8 && documento.length !== 11)) {
       return NextResponse.json(
-        { message: "El DNI debe tener 8 dígitos" },
+        { message: "El documento debe tener 8 (DNI) o 11 (RUC) dígitos" },
         { status: 400 }
       );
     }
 
-    // 2. Buscar si ya existe en Firebase (Caché)
-    const clienteRef = doc(db, "clientes", dni);
+    // 2. Buscar en Caché (Firebase)
+    const clienteRef = doc(db, "clientes", documento);
     const clienteSnap = await getDoc(clienteRef);
 
     if (clienteSnap.exists()) {
-      // Devolvemos DIRECTAMENTE los datos del cliente
       return NextResponse.json(clienteSnap.data());
     }
 
-    // 3. Si no existe, consultamos a la API Externa
-    const datosReniec = await consultarDniReniec(dni);
+    // 3. Consultar API Externa (RENIEC o SUNAT)
+    let datosExternos = null;
+    let tipoDoc = "DNI";
 
-    if (!datosReniec) {
+    if (documento.length === 8) {
+      // --- DNI (RENIEC) ---
+      tipoDoc = "DNI";
+      datosExternos = await consultarDniReniec(documento);
+    } else if (documento.length === 11) {
+      // --- RUC (SUNAT) ---
+      tipoDoc = "RUC";
+      // AQUÍ ESTABA EL ERROR: Antes había un código falso, ahora llamamos al servicio real
+      datosExternos = await consultarRucSunat(documento);
+    }
+
+    if (!datosExternos) {
       return NextResponse.json(
-        { message: "DNI no encontrado en RENIEC" },
+        { message: `Documento (${tipoDoc}) no encontrado en padrón oficial` },
         { status: 404 }
       );
     }
 
-    // 4. Guardar el nuevo cliente en Firestore
+    // 4. Guardar en Firestore
     const nuevoCliente = {
-      ...datosReniec,
+      dni: documento,
+      tipoDocumento: tipoDoc,
+
+      nombres: datosExternos.nombres,
+      apellidoPaterno: datosExternos.apellidoPaterno,
+      apellidoMaterno: datosExternos.apellidoMaterno,
+      direccion: datosExternos.direccion,
+
+      estadoContribuyente: datosExternos.estadoContribuyente || "ACTIVO",
+      condicionContribuyente: datosExternos.condicionContribuyente || "HABIDO",
+
       pep: false,
       fechaRegistro: new Date().toISOString(),
       estado: "ACTIVO",
@@ -46,10 +68,9 @@ export async function POST(request) {
 
     await setDoc(clienteRef, nuevoCliente);
 
-    // Devolvemos DIRECTAMENTE los datos (Sin envolverlos en "datos" ni "exito")
     return NextResponse.json(nuevoCliente);
   } catch (error) {
-    console.error("🔴 Error:", error);
+    console.error("🔴 Error API Verificar:", error);
     return NextResponse.json(
       { message: "Error interno", error: error.message },
       { status: 500 }

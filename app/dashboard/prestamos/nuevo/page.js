@@ -16,14 +16,13 @@ export default function NuevoPrestamoPage() {
     cuotas: 12,
     tea: 20,
     pep: false,
-    fechaInicio: new Date().toISOString().split("T")[0], // Fecha inicial por defecto (hoy)
+    fechaInicio: new Date().toISOString().split("T")[0],
   });
 
-  // Resultados Simulados
   const [cronograma, setCronograma] = useState([]);
   const [alertas, setAlertas] = useState({ uit: false, pep: false });
 
-  // --- Lógica Paso 1: Verificar DNI y Validar Deuda Pendiente ---
+  // --- Lógica Paso 1: Verificar Documento (DNI o RUC) ---
   const verificarDNI = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -40,13 +39,14 @@ export default function NuevoPrestamoPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.message || "Error al verificar DNI");
+        setError(data.message || "Error al verificar documento");
         setLoading(false);
         return;
       }
 
-      if (!data || (!data.nombres && !data.nombreCompleto)) {
-        setError("El backend respondió OK, pero sin datos de nombres.");
+      // Validación flexible: Puede tener nombres (DNI) o razonSocial guardada como nombres (RUC)
+      if (!data || !data.nombres) {
+        setError("El backend respondió OK, pero sin datos de nombre.");
         setLoading(false);
         return;
       }
@@ -65,7 +65,7 @@ export default function NuevoPrestamoPage() {
 
       if (prestamoActivo) {
         setError(
-          `⚠️ El cliente ya tiene un préstamo vigente (ID: ${prestamoActivo.id}) en estado: ${prestamoActivo.estado}. Debe cancelarlo antes de solicitar uno nuevo.`
+          `⚠️ El cliente ya tiene un préstamo vigente (ID: ${prestamoActivo.id}) en estado: ${prestamoActivo.estado}.`
         );
         setLoading(false);
         return;
@@ -82,12 +82,9 @@ export default function NuevoPrestamoPage() {
   };
 
   // --- Lógica Paso 2: Simulación y Guardado ---
-
-  // Efecto: Recalcular cronograma cada vez que cambian los inputs (incluyendo fecha)
   useEffect(() => {
     if (paso === 2) {
       const tem = FinancialService.calculateTem(form.tea);
-      // Validamos que monto sea número para evitar NaN en cálculos
       const montoCalc = form.monto === "" ? 0 : Number(form.monto);
 
       const schedule = FinancialService.generateSchedule(
@@ -111,13 +108,9 @@ export default function NuevoPrestamoPage() {
 
     // --- VALIDACIÓN DE LÍMITE MÁXIMO ---
     const montoNum = Number(form.monto);
-    if (montoNum > 999999.99) {
-      // Ajustado a 6 enteros
-      return alert("El monto no puede superar los S/ 999,999.99");
-    }
-    if (montoNum <= 0) {
-      return alert("El monto debe ser mayor a 0");
-    }
+    if (montoNum > 9999999)
+      return alert("El monto no puede superar los S/ 9,999,999");
+    if (montoNum <= 0) return alert("El monto debe ser mayor a 0");
 
     setLoading(true);
 
@@ -155,12 +148,7 @@ export default function NuevoPrestamoPage() {
   // --- CONTROLADOR DE INPUT MONTO (REGEX) ---
   const handleMontoChange = (e) => {
     const val = e.target.value;
-    // Explicación Regex:
-    // ^          -> Inicio
-    // \d{0,6}    -> De 0 a 6 dígitos enteros
-    // (\.\d{0,2})? -> Opcionalmente un punto seguido de 0 a 2 decimales
-    // $          -> Fin
-    if (/^\d{0,6}(\.\d{0,2})?$/.test(val)) {
+    if (/^\d{0,7}(\.\d{0,2})?$/.test(val)) {
       setForm({ ...form, monto: val });
     }
   };
@@ -172,18 +160,18 @@ export default function NuevoPrestamoPage() {
         Solicitud de Crédito
       </h2>
 
-      {/* PASO 1: Buscador de DNI */}
+      {/* PASO 1: Buscador de DNI o RUC */}
       {paso === 1 && (
         <div className="bg-white p-8 rounded-lg shadow-md">
           <label className="block text-gray-700 font-bold mb-2">
-            Ingrese DNI del Cliente
+            Ingrese DNI o RUC del Cliente
           </label>
           <form onSubmit={verificarDNI} className="flex gap-4">
             <input
               type="text"
-              maxLength={8}
+              maxLength={11} // CAMBIO A 11
               className="border p-3 rounded w-full text-lg"
-              placeholder="Ej: 46027897"
+              placeholder="DNI (8) o RUC (11)"
               value={dniBusqueda}
               onChange={(e) =>
                 setDniBusqueda(e.target.value.replace(/\D/g, ""))
@@ -191,8 +179,12 @@ export default function NuevoPrestamoPage() {
             />
             <button
               type="submit"
-              disabled={loading || dniBusqueda.length !== 8}
-              className="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700 disabled:bg-gray-400 font-bold"
+              // Habilitado con 8 o 11 dígitos
+              disabled={
+                loading ||
+                (dniBusqueda.length !== 8 && dniBusqueda.length !== 11)
+              }
+              className="bg-blue-600 text-white px-6 py-3 rounded hover:bg-blue-700 disabled:bg-gray-400 font-bold whitespace-nowrap"
             >
               {loading ? "Verificando..." : "Verificar"}
             </button>
@@ -214,15 +206,34 @@ export default function NuevoPrestamoPage() {
             {/* Tarjeta Cliente */}
             <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
               <p className="text-sm text-blue-600 font-bold">
-                Cliente Verificado
+                {cliente.tipoDocumento === "RUC"
+                  ? "Empresa Verificada"
+                  : "Cliente Verificado"}
               </p>
-              <p className="text-lg font-bold text-gray-800">
-                {cliente.nombres} {cliente.apellidoPaterno}
+
+              <p className="text-lg font-bold text-gray-800 uppercase">
+                {/* Si es RUC muestra Razón Social, si es DNI muestra Nombre completo */}
+                {cliente.nombres} {cliente.apellidoPaterno}{" "}
+                {cliente.apellidoMaterno}
               </p>
-              <p className="text-gray-600">DNI: {cliente.dni}</p>
+
+              <div className="mt-2 text-sm text-gray-600">
+                <p>
+                  <span className="font-bold">Doc:</span> {cliente.dni}
+                </p>
+                {cliente.direccion && (
+                  <p
+                    className="mt-1 text-xs text-gray-500 truncate"
+                    title={cliente.direccion}
+                  >
+                    📍 {cliente.direccion}
+                  </p>
+                )}
+              </div>
+
               <button
                 onClick={() => setPaso(1)}
-                className="text-sm text-blue-500 underline mt-2"
+                className="text-sm text-blue-500 underline mt-3"
               >
                 Cambiar cliente
               </button>
@@ -234,18 +245,15 @@ export default function NuevoPrestamoPage() {
                 <label className="block text-gray-700 font-bold">
                   Monto (S/)
                 </label>
-                {/* --- INPUT VALIDADO CON REGEX --- */}
                 <input
-                  type="text" // Cambiado a text para mejor control del regex (number a veces deja pasar caracteres raros)
-                  inputMode="decimal" // Teclado numérico en móviles
+                  type="text"
+                  inputMode="decimal"
                   className="w-full border p-2 rounded mt-1"
                   value={form.monto}
-                  onChange={handleMontoChange} // Usamos la nueva función
+                  onChange={handleMontoChange}
                   placeholder="0.00"
                 />
-                <p className="text-xs text-gray-400 mt-1">
-                  Máx. 6 enteros y 2 decimales
-                </p>
+                <p className="text-xs text-gray-400 mt-1">Máx. 9,999,999.00</p>
               </div>
 
               <div>
@@ -274,7 +282,7 @@ export default function NuevoPrestamoPage() {
                 />
               </div>
 
-              {/* FECHA DESBLOQUEADA */}
+              {/* Fecha Inicio Libre */}
               <div>
                 <label className="block text-gray-700 font-bold">
                   Fecha Inicio (Libre)
@@ -287,9 +295,6 @@ export default function NuevoPrestamoPage() {
                     setForm({ ...form, fechaInicio: e.target.value })
                   }
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Seleccione pasado para simular mora o futuro para agendar.
-                </p>
               </div>
 
               <div className="flex items-center gap-2 mt-4">
@@ -300,7 +305,10 @@ export default function NuevoPrestamoPage() {
                   onChange={(e) => setForm({ ...form, pep: e.target.checked })}
                   className="w-5 h-5 text-blue-600"
                 />
-                <label htmlFor="pep" className="text-gray-700 font-medium">
+                <label
+                  htmlFor="pep"
+                  className="text-gray-700 font-medium text-sm"
+                >
                   Es Persona Políticamente Expuesta (PEP)
                 </label>
               </div>
@@ -308,22 +316,20 @@ export default function NuevoPrestamoPage() {
               {/* ALERTAS DINÁMICAS */}
               {(alertas.uit || alertas.pep) && (
                 <div className="bg-orange-100 border-l-4 border-orange-500 p-4 mt-4">
-                  <p className="font-bold text-orange-700">
-                    ⚠️ Requiere Documentación Adicional
+                  <p className="font-bold text-orange-700 text-sm">
+                    ⚠️ Requiere Documentación
                   </p>
                   <p className="text-sm text-orange-600">
                     {alertas.uit && "• El monto supera 1 UIT. "}
                     {alertas.pep && "• El cliente es PEP."}
                   </p>
-                  <button className="mt-2 text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded hover:bg-orange-300">
-                    <a
-                      href="/ddjj_formato.pdf"
-                      download="Declaracion_Jurada_Origen_Fondos.pdf"
-                      className="decoration-none text-orange-800"
-                    >
-                      📄 Descargar DDJJ Origen de Fondos
-                    </a>
-                  </button>
+                  <a
+                    href="/ddjj_formato.pdf"
+                    download
+                    className="block mt-2 text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded text-center hover:bg-orange-300 decoration-none"
+                  >
+                    📄 Descargar DDJJ
+                  </a>
                 </div>
               )}
 
@@ -337,11 +343,11 @@ export default function NuevoPrestamoPage() {
             </div>
           </div>
 
-          {/* Columna Derecha: Cronograma Previo */}
+          {/* Columna Derecha: Cronograma */}
           <div className="lg:col-span-2">
             <div className="bg-white p-6 rounded-lg shadow-md h-full">
               <h3 className="text-xl font-bold mb-4 text-gray-700">
-                Simulación de Cronograma
+                Simulación
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left text-gray-500">
