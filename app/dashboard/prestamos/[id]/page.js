@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { jsPDF } from "jspdf";
-import { generarPDFCronograma } from "@/lib/pdfGenerator"; // Importación de la librería de tu amigo
+import { generarPDFCronograma } from "@/lib/pdfGenerator";
 
 export default function DetallePrestamoPage() {
   const { id } = useParams();
@@ -20,6 +20,11 @@ export default function DetallePrestamoPage() {
   const [medioPago, setMedioPago] = useState("EFECTIVO");
   const [procesando, setProcesando] = useState(false);
 
+  // --- FUNCIÓN DE REDONDEO (0.05 -> 0.10, 0.04 -> 0.00) ---
+  const redondearEfectivo = (valor) => {
+    return (Math.round(valor * 10) / 10).toFixed(2);
+  };
+
   const fetchPrestamo = async () => {
     try {
       const res = await fetch("/api/prestamos");
@@ -27,7 +32,6 @@ export default function DetallePrestamoPage() {
       const encontrado = data.find((p) => p.id === id);
 
       if (encontrado) {
-        // --- PARCHE DE TU AMIGA: Recuperar nombre si falta ---
         if (!encontrado.nombreCliente) {
           try {
             const clienteRes = await fetch("/api/cliente/verificar", {
@@ -61,20 +65,33 @@ export default function DetallePrestamoPage() {
     if (id) fetchPrestamo();
   }, [id]);
 
-  // --- LÓGICA DE MORA CON MEMORIA (Mora Congelada) ---
+  // --- LÓGICA DE ACTUALIZACIÓN DE MONTO AL CAMBIAR MEDIO DE PAGO ---
+  useEffect(() => {
+    if (cuotaSeleccionada) {
+      const desglose = calcularDesglosePago(cuotaSeleccionada);
+      const totalExacto = desglose.total;
+
+      if (medioPago === "EFECTIVO") {
+        setMontoPagar(redondearEfectivo(totalExacto));
+      } else {
+        setMontoPagar(totalExacto.toFixed(2));
+      }
+    }
+  }, [medioPago]);
+
+  // --- AQUÍ ESTÁ EL CAMBIO DE LÓGICA DE MORA ---
   const calcularDesglosePago = (cuota) => {
     if (!cuota) return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
 
     const capitalPagado = Number(cuota.capitalPagado || 0);
     const capitalPendiente = Number(cuota.amount) - capitalPagado;
     const moraPagada = Number(cuota.moraPagada || 0);
-
-    // LEEMOS LA MORA HISTÓRICA GUARDADA EN BD
     const moraCongelada = Number(cuota.moraCongelada || 0);
 
-    // Fechas
     const fechaVencimiento = new Date(cuota.dueDate);
     const hoy = new Date();
+
+    // Normalizamos horas para comparar solo fechas
     fechaVencimiento.setHours(0, 0, 0, 0);
     hoy.setHours(0, 0, 0, 0);
 
@@ -83,17 +100,19 @@ export default function DetallePrestamoPage() {
 
     let moraActiva = 0;
 
-    // Calculamos mora SOLO sobre el capital vivo hoy
     if (capitalPendiente > 0.01 && diasAtraso > 0) {
-      const TASA_MENSUAL = 0.01;
-      const tasaDiaria = TASA_MENSUAL / 30;
-      moraActiva = capitalPendiente * tasaDiaria * diasAtraso;
+      const TASA_MENSUAL = 0.01; // 1% Fijo
+
+      // NUEVA LÓGICA: PERIODOS DE 30 DÍAS
+      // Math.ceil(1 / 30) = 1 periodo -> 1%
+      // Math.ceil(29 / 30) = 1 periodo -> 1%
+      // Math.ceil(31 / 30) = 2 periodos -> 2%
+      const periodosMora = Math.ceil(diasAtraso / 30);
+
+      moraActiva = capitalPendiente * TASA_MENSUAL * periodosMora;
     }
 
-    // Mora Total = (Mora del saldo actual) + (Mora Histórica Congelada)
     const moraTotalGenerada = moraActiva + moraCongelada;
-
-    // Restamos lo que ya pagó
     const deudaMora = Math.max(0, moraTotalGenerada - moraPagada);
 
     return {
@@ -101,14 +120,15 @@ export default function DetallePrestamoPage() {
       mora: deudaMora,
       total: capitalPendiente + deudaMora,
       diasAtraso: diasAtraso > 0 ? diasAtraso : 0,
-      moraSnapshot: moraTotalGenerada, // Dato para enviar al backend
+      moraSnapshot: moraTotalGenerada,
     };
   };
 
   const abrirModalPago = (cuota) => {
     setCuotaSeleccionada(cuota);
     const desglose = calcularDesglosePago(cuota);
-    setMontoPagar(desglose.total.toFixed(2));
+
+    setMontoPagar(redondearEfectivo(desglose.total));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");
     setModalPagoOpen(true);
@@ -116,7 +136,6 @@ export default function DetallePrestamoPage() {
 
   const generarComprobante = async (cuotaData) => {
     try {
-      // Calcular el saldo de capital pendiente del préstamo
       const saldoCapital = prestamo.cronograma.reduce((total, c) => {
         const capitalPendiente = c.capital - (c.capitalPagado || 0);
         return total + capitalPendiente;
@@ -143,11 +162,8 @@ export default function DetallePrestamoPage() {
       });
 
       if (res.ok) {
-        // Recibimos el archivo BLOB (Binario)
         const blob = await res.blob();
-        // Creamos una URL temporal
         const url = window.URL.createObjectURL(blob);
-        // Creamos un link invisible para forzar la descarga
         const a = document.createElement("a");
         a.href = url;
         a.download = `comprobante_${prestamo.id}_${cuotaData.num}.pdf`;
@@ -182,11 +198,11 @@ export default function DetallePrestamoPage() {
 
     const desglose = calcularDesglosePago(cuotaSeleccionada);
 
-    // Validación con margen de error por redondeo
-    if (montoNum > desglose.total + 1) {
+    // Validación flexible por redondeo (margen de 0.10)
+    if (montoNum > desglose.total + 0.1) {
       if (
         !confirm(
-          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado con mora (S/ ${desglose.total.toFixed(
+          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado exacto (S/ ${desglose.total.toFixed(
             2
           )}). ¿Está seguro de continuar?`
         )
@@ -197,12 +213,10 @@ export default function DetallePrestamoPage() {
 
     setProcesando(true);
 
-    // Payload base
     const payload = {
       prestamoId: prestamo.id,
       numeroCuota: cuotaSeleccionada.num,
       montoPagado: montoNum,
-      // ENVIAMOS EL SNAPSHOT AL BACKEND
       moraCalculadaSnapshot: desglose.moraSnapshot,
     };
 
@@ -223,7 +237,11 @@ export default function DetallePrestamoPage() {
         const res = await fetch("/api/pagos", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...payload, medioPago: "EFECTIVO", montoRecibido: recibidoNum }),
+          body: JSON.stringify({
+            ...payload,
+            medioPago: "EFECTIVO",
+            montoRecibido: recibidoNum,
+          }),
         });
 
         const data = await res.json();
@@ -293,7 +311,6 @@ export default function DetallePrestamoPage() {
         <h1 className="text-2xl font-bold">
           Cobranza - DNI {prestamo.dniCliente}
         </h1>
-        {/* --- BOTÓN NUEVO: DESCARGAR CRONOGRAMA --- */}
         <button
           onClick={() => generarPDFCronograma(prestamo)}
           className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-700 text-sm flex items-center gap-2"
@@ -425,7 +442,7 @@ export default function DetallePrestamoPage() {
                   </div>
                 )}
                 <div className="border-t pt-1 flex justify-between font-bold text-lg text-gray-800">
-                  <span>Total a Pagar:</span>
+                  <span>Total Exacto:</span>
                   <span>
                     S/{" "}
                     {calcularDesglosePago(cuotaSeleccionada).total.toFixed(2)}
@@ -435,7 +452,8 @@ export default function DetallePrestamoPage() {
 
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">
-                  Monto que pagará el cliente
+                  Monto a Pagar{" "}
+                  {medioPago === "EFECTIVO" ? "(Redondeado)" : "(Exacto)"}
                 </label>
                 <input
                   type="number"

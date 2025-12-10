@@ -15,7 +15,7 @@ export async function POST(req) {
     const apiUrl = process.env.FLOW_API_URL;
 
     // ----------------------------
-    // CONSULTAR ESTADO DEL PAGO
+    // 1. CONSULTAR ESTADO DEL PAGO A FLOW
     // ----------------------------
     const params = { apiKey, token };
 
@@ -30,7 +30,9 @@ export async function POST(req) {
     const url = `${apiUrl}/payment/getStatus?${queryString}&s=${signature}`;
 
     const resFlow = await fetch(url);
-    const data = await resFlow.json(); // <--- Aquí viene 'optional' si lo enviamos
+    const data = await resFlow.json();
+
+    // console.log(">>> 🔍 INSPECCION DE FLOW:", JSON.stringify(data, null, 2)); // Ya vimos que llega bien
 
     if (!resFlow.ok || !data.commerceOrder) {
       console.error("Error status Flow:", data);
@@ -38,33 +40,65 @@ export async function POST(req) {
     }
 
     if (data.status !== 2) {
-      // 2 = pagado
       return NextResponse.json({ ignored: true });
     }
 
     // ----------------------------
-    // [NUEVO] RECUPERAR ETIQUETA DE MEDIO DE PAGO
+    // 2. LOGICA INTELIGENTE PARA EL NOMBRE DEL MEDIO DE PAGO
     // ----------------------------
-    let medioPagoFinal = "FLOW"; // Valor por defecto (seguridad para no romper nada)
+    let medioPagoFinal = "FLOW"; // Valor por defecto
 
+    // ESTRATEGIA 1: Leer la etiqueta 'optional' (CORREGIDA)
     if (data.optional) {
-      try {
-        const optionalData = JSON.parse(data.optional);
-        if (optionalData.etiqueta) {
-          medioPagoFinal = optionalData.etiqueta; // "TARJETA" o "BILLETERA DIGITAL"
+      let optionalData = data.optional;
+
+      // CASO A: Flow nos devuelve un String (JSON String) -> Lo parseamos
+      if (typeof optionalData === "string") {
+        try {
+          optionalData = JSON.parse(optionalData);
+        } catch (e) {
+          console.warn("Error parseando optional string:", e);
+          optionalData = null;
         }
-      } catch (e) {
-        console.warn("Error leyendo optional, usando default:", e);
+      }
+
+      // CASO B: Flow nos devuelve un Objeto directo (Tu caso actual) -> Lo usamos directo
+      // (No hacemos nada porque optionalData ya es el objeto)
+
+      // Verificamos si logramos obtener la etiqueta
+      if (optionalData && optionalData.etiqueta) {
+        medioPagoFinal = optionalData.etiqueta;
+      }
+    }
+
+    // ESTRATEGIA 2: Fallback técnico (Solo si la estrategia 1 falló)
+    if (
+      medioPagoFinal === "FLOW" &&
+      data.paymentData &&
+      data.paymentData.media
+    ) {
+      // Nota: En tu log vimos que media llega como "PagoEfectivo" (string),
+      // así que el parseInt podría fallar o dar NaN, pero no importa
+      // porque la ESTRATEGIA 1 ahora sí funcionará.
+
+      const mediaVal = data.paymentData.media;
+
+      if (mediaVal == 11 || mediaVal === "11") {
+        medioPagoFinal = "TARJETA";
+      } else if (mediaVal == 29 || mediaVal === "29") {
+        medioPagoFinal = "BILLETERA DIGITAL";
       }
     }
 
     // ----------------------------
-    // SEPARAR COMMERCE ORDER
+    // 3. SEPARAR ID DE LA ORDEN
     // ----------------------------
     const [prestamoId, cuotaStr] = data.commerceOrder.split("-C");
     const numeroCuota = parseInt(cuotaStr);
 
-    // Registrar pago en Firestore
+    // ----------------------------
+    // 4. GUARDAR EN FIREBASE
+    // ----------------------------
     const pagoRes = await fetch(
       `${process.env.NEXT_PUBLIC_BASE_URL}/api/pagos`,
       {
@@ -74,7 +108,7 @@ export async function POST(req) {
           prestamoId,
           numeroCuota,
           montoPagado: data.amount,
-          medioPago: medioPagoFinal, // <--- Usamos la variable inteligente
+          medioPago: medioPagoFinal,
         }),
       }
     );

@@ -37,9 +37,22 @@ export async function POST(request) {
       const cuota = cronograma[cuotaIndex];
 
       // ============================
+      // [MEJORA] DEFINIR HORA PERÚ
+      // ============================
+      // Esto congela la hora actual en Lima para guardarla en la BD
+      const fechaActualPeru = new Date(
+        new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
+      );
+      const fechaActualISO = fechaActualPeru.toISOString();
+
+      // ============================
       // 2. CÁLCULO DE MORA (Tu lógica matemática robusta)
       // ============================
-      const hoy = new Date();
+      // Usamos la hora de Perú también para comparar si venció o no
+      const hoy = new Date(
+        new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
+      );
+      
       // Normalizar fechas para evitar errores de horas
       hoy.setHours(0, 0, 0, 0);
       const fechaVencimiento = new Date(cuota.dueDate);
@@ -134,7 +147,7 @@ export async function POST(request) {
       cronograma[cuotaIndex] = {
         ...cuota,
         estado: estadoCuota,
-        fechaUltimoPago: new Date().toISOString(),
+        fechaUltimoPago: fechaActualISO, // <--- CAMBIO 1: Fecha Perú
         capitalPagado: nuevoCapitalPagado,
         moraPagada: nuevaMoraPagada,
         // Guardamos el nuevo campo vital
@@ -170,7 +183,7 @@ export async function POST(request) {
         },
         medioPago,
         montoRecibido: montoRecibido || montoPagado,
-        fechaRegistro: new Date().toISOString(),
+        fechaRegistro: fechaActualISO, // <--- CAMBIO 2: Fecha Perú
         usuarioCajero: "admin",
       };
 
