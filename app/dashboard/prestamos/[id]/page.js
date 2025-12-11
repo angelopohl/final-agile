@@ -578,7 +578,7 @@ export default function DetallePrestamoPage() {
                       : "bg-gray-50 text-gray-700"
                   }`}
                 >
-                  Pago efectivo fuera de caja o Billetera Digital
+                  Billetera Digital
                 </button>
                 <button
                   onClick={() => setMedioPago("TARJETA")}
