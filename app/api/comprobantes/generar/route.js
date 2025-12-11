@@ -3,16 +3,12 @@ import { jsPDF } from "jspdf";
 import { db } from "@/lib/firebase";
 import {
   doc,
-  getDoc,
   collection,
   query,
   where,
-  orderBy,
-  limit,
   getDocs,
-  setDoc,
-  updateDoc, // Importante: para guardar el número en el pago existente
   runTransaction,
+  limit,
 } from "firebase/firestore";
 
 // --- FUNCIÓN AUXILIAR: NUMERO A LETRAS ---
@@ -92,11 +88,10 @@ function numeroALetras(num) {
   return resultado.trim();
 }
 
-// --- API ROUTE ---
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { prestamoId, numeroCuota, monto, cliente: clienteBody } = body;
+    let { prestamoId, numeroCuota, monto, cliente: clienteBody } = body;
 
     if (!prestamoId || !numeroCuota) {
       return NextResponse.json(
@@ -105,139 +100,157 @@ export async function POST(req) {
       );
     }
 
-    // 1. OBTENER DATOS DEL PRÉSTAMO
-    const prestamoRef = doc(db, "prestamos", prestamoId);
-    const prestamoSnap = await getDoc(prestamoRef);
+    const cuotaNumero = Number(numeroCuota);
+    console.log(
+      `🔍 Generando FACTURA - ID: ${prestamoId}, Cuota: ${cuotaNumero}`
+    );
 
-    if (!prestamoSnap.exists()) {
-      return NextResponse.json(
-        { error: "Préstamo no encontrado" },
-        { status: 404 }
-      );
-    }
-
-    // 2. BUSCAR EL REGISTRO DE PAGO REAL
+    // 1. BUSCAR EL DOCUMENTO DE PAGO
     const pagosRef = collection(db, "pagos");
     const q = query(
       pagosRef,
       where("prestamoId", "==", prestamoId),
-      where("numeroCuota", "==", numeroCuota),
-      orderBy("fechaRegistro", "desc"),
+      where("numeroCuota", "==", cuotaNumero),
       limit(1)
     );
 
     const pagoSnapshot = await getDocs(q);
 
-    let medioPagoReal = "Efectivo";
-    let montoRecibido = 0;
-
-    // Variables para controlar el número de comprobante
-    let numeroComprobante = null;
-    let pagoDocRef = null;
-
-    if (!pagoSnapshot.empty) {
-      const pagoDoc = pagoSnapshot.docs[0];
-      const pagoData = pagoDoc.data();
-      pagoDocRef = pagoDoc.ref; // Guardamos la referencia para actualizar luego
-
-      if (pagoData.medioPago) medioPagoReal = pagoData.medioPago;
-      if (pagoData.montoRecibido) montoRecibido = pagoData.montoRecibido;
-
-      // SI YA TIENE NÚMERO, LO RECUPERAMOS
-      if (pagoData.numeroComprobante) {
-        numeroComprobante = pagoData.numeroComprobante;
-        console.log("♻️ Usando comprobante existente:", numeroComprobante);
-      }
-    }
-
-    const prestamoData = prestamoSnap.data();
-    const cuotaData = prestamoData.cronograma.find(
-      (c) => c.num === numeroCuota
-    );
-
-    if (!cuotaData) {
+    if (pagoSnapshot.empty) {
       return NextResponse.json(
-        { error: "Cuota no encontrada" },
+        {
+          error:
+            "No se encontró el pago. Asegúrate de que el pago esté registrado.",
+        },
         { status: 404 }
       );
     }
 
-    // 3. PREPARAR DATOS PARA EL PDF
-    const clienteNombre =
-      prestamoData.nombreCliente || clienteBody?.nombre || "N/A";
-    const clienteDni =
-      prestamoData.dniCliente || clienteBody?.numero_documento || "N/A";
+    const pagoDoc = pagoSnapshot.docs[0];
+    const pagoDocRef = pagoDoc.ref;
 
-    // Hora Perú corregida
-    const fechaEmision = new Date().toLocaleDateString("es-PE", {
-      timeZone: "America/Lima",
+    // 2. REFERENCIAS
+    const prestamoRef = doc(db, "prestamos", prestamoId);
+    const contadorRef = doc(db, "contadores", "comprobantes");
+
+    // 3. TRANSACCIÓN ROBUSTA (Con SET MERGE para forzar guardado)
+    let resultPDF = null;
+
+    await runTransaction(db, async (transaction) => {
+      const prestamoSnap = await transaction.get(prestamoRef);
+      const pagoSnap = await transaction.get(pagoDocRef);
+
+      if (!prestamoSnap.exists()) throw new Error("Préstamo no encontrado");
+      if (!pagoSnap.exists())
+        throw new Error("Pago no encontrado (desapareció)");
+
+      const prestamoData = prestamoSnap.data();
+      const pagoData = pagoSnap.data();
+
+      // Buscar cuota
+      const cronograma = prestamoData.cronograma || [];
+      const indexCuota = cronograma.findIndex((c) => c.num === cuotaNumero);
+      if (indexCuota === -1)
+        throw new Error("Cuota no encontrada en cronograma");
+
+      const cuotaData = cronograma[indexCuota];
+
+      // --- LÓGICA DE NÚMERO ---
+      // Revisamos si YA existe en el pago o en la cuota
+      let numeroComprobante =
+        pagoData.numeroComprobante || cuotaData.numeroComprobante || null;
+
+      if (numeroComprobante) {
+        console.log("♻️ Factura YA EXISTE:", numeroComprobante);
+        // Sincronización defensiva: Si falta en el pago, lo ponemos a la fuerza
+        if (!pagoData.numeroComprobante) {
+          transaction.set(pagoDocRef, { numeroComprobante }, { merge: true });
+        }
+      } else {
+        // GENERAR NUEVO
+        const contadorSnap = await transaction.get(contadorRef);
+        let siguienteNumero = 1;
+        if (contadorSnap.exists()) {
+          siguienteNumero = (contadorSnap.data().ultimo || 0) + 1;
+        }
+
+        const serie = String(siguienteNumero).padStart(3, "0");
+        const correlativo = String(siguienteNumero).padStart(6, "0");
+        numeroComprobante = `F${serie}-${correlativo}`;
+
+        console.log("🆕 Creando NUEVA Factura:", numeroComprobante);
+
+        // --- GUARDADO CRÍTICO ---
+        // 1. Contador
+        transaction.set(contadorRef, { ultimo: siguienteNumero });
+
+        // 2. Pago (Factura) - USAMOS SET MERGE (La solución clave)
+        // Esto asegura que se escriba el campo sí o sí, sin fallar si el doc es "nuevo"
+        transaction.set(
+          pagoDocRef,
+          { numeroComprobante: numeroComprobante },
+          { merge: true }
+        );
+
+        // 3. Préstamo (Cronograma)
+        cronograma[indexCuota].numeroComprobante = numeroComprobante;
+        transaction.update(prestamoRef, { cronograma });
+      }
+
+      // Preparar datos PDF
+      const clienteNombre =
+        prestamoData.nombreCliente || clienteBody?.nombre || "N/A";
+      const clienteDni =
+        prestamoData.dniCliente || clienteBody?.numero_documento || "N/A";
+      const fechaEmision = new Date().toLocaleDateString("es-PE", {
+        timeZone: "America/Lima",
+      });
+      const numeroCreditoFormat = prestamoId;
+
+      const capitalPagado = cuotaData.capitalPagado || 0;
+      const moraPagada = cuotaData.moraPagada || 0;
+      const interesOriginal = cuotaData.interest || 0;
+      const redondearADecima = (valor) => Math.round(valor * 10) / 10;
+
+      const interesPagado = Math.min(capitalPagado, interesOriginal);
+      const amortizacionPagada = redondearADecima(
+        capitalPagado - Math.min(capitalPagado, interesOriginal)
+      );
+      const moraPagadaRedondeada = redondearADecima(moraPagada);
+
+      let subtotal = redondearADecima(
+        interesPagado + amortizacionPagada + moraPagadaRedondeada
+      );
+      let totalPagado = subtotal;
+
+      // Respetar monto real pagado si existe
+      if (pagoData.montoRecibido) {
+        // Lógica opcional si quieres usar el monto exacto del recibo
+      }
+      if (
+        pagoData.medioPago === "EFECTIVO" ||
+        pagoData.medioPago === "Efectivo"
+      ) {
+        totalPagado = redondearADecima(subtotal);
+      }
+
+      resultPDF = {
+        clienteNombre,
+        clienteDni,
+        fechaEmision,
+        numeroCreditoFormat,
+        interesPagado,
+        moraPagadaRedondeada,
+        totalPagado,
+        numeroComprobante,
+        subtotal,
+      };
     });
 
-    const capitalPagado = cuotaData.capitalPagado || 0;
-    const moraPagada = cuotaData.moraPagada || 0;
-    const interesOriginal = cuotaData.interest || 0;
-
-    const redondearADecima = (valor) => Math.round(valor * 10) / 10;
-
-    const interesPagado = Math.min(capitalPagado, interesOriginal);
-    const amortizacionPagada = redondearADecima(
-      capitalPagado - Math.min(capitalPagado, interesOriginal)
-    );
-    const moraPagadaRedondeada = redondearADecima(moraPagada);
-
-    const subtotal = redondearADecima(
-      interesPagado + amortizacionPagada + moraPagadaRedondeada
-    );
-    let totalPagado = subtotal;
-
-    if (medioPagoReal === "EFECTIVO" || medioPagoReal === "Efectivo") {
-      totalPagado = redondearADecima(subtotal);
-    }
-
-    // 4. GENERAR O RECUPERAR NÚMERO DE COMPROBANTE (Lógica Clave)
-    if (!numeroComprobante) {
-      console.log("🆕 Generando NUEVO número de comprobante...");
-      const contadorRef = doc(db, "contadores", "comprobantes");
-
-      try {
-        await runTransaction(db, async (transaction) => {
-          const contadorDoc = await transaction.get(contadorRef);
-          let siguienteNumero = 1;
-
-          if (contadorDoc.exists()) {
-            siguienteNumero = (contadorDoc.data().ultimo || 0) + 1;
-          }
-
-          // Actualizar contador global
-          transaction.set(contadorRef, { ultimo: siguienteNumero });
-
-          // Formatear
-          const serie = String(siguienteNumero).padStart(3, "0");
-          const correlativo = String(siguienteNumero).padStart(6, "0");
-          numeroComprobante = `F${serie}-${correlativo}`;
-
-          // Si existe el pago, guardamos este número para siempre
-          if (pagoDocRef) {
-            transaction.update(pagoDocRef, {
-              numeroComprobante: numeroComprobante,
-            });
-          }
-        });
-      } catch (error) {
-        console.error("Error generando número:", error);
-        numeroComprobante = `F014-${String(
-          Math.floor(Math.random() * 900000)
-        )}`;
-      }
-    }
-
-    const numeroCreditoFormat = prestamoId;
-
-    // --- 5. DIBUJO DEL PDF (Aquí estaba el problema de "blanco") ---
+    // --- GENERAR PDF ---
     const pdf = new jsPDF();
     pdf.setFont("helvetica", "normal");
 
-    // Logo y encabezado
     let y = 20;
     pdf.setFontSize(14);
     pdf.setFont(undefined, "bold");
@@ -255,7 +268,6 @@ export async function POST(req) {
     y += 4;
     pdf.text("soporte@prestape.com", 20, y);
 
-    // Cuadro RUC y Número
     const boxX = 130;
     const boxY = 15;
     const boxWidth = 70;
@@ -276,17 +288,14 @@ export async function POST(req) {
     });
     textY += 6;
     pdf.setFont(undefined, "bold");
-    // AQUÍ USAMOS EL NÚMERO YA CALCULADO O RECUPERADO
-    pdf.text(`Nro ${numeroComprobante}`, boxX + boxWidth / 2, textY, {
+    pdf.text(`Nro ${resultPDF.numeroComprobante}`, boxX + boxWidth / 2, textY, {
       align: "center",
     });
 
-    // Línea separadora
     y = 60;
     pdf.setLineWidth(0.3);
     pdf.line(15, y, 195, y);
 
-    // Tabla Cliente
     y += 8;
     const tableStartY = y;
     const col1X = 18;
@@ -309,7 +318,6 @@ export async function POST(req) {
     let currentY = tableStartY + 1;
     pdf.setFontSize(9);
 
-    // Filas Tabla Cliente
     const drawRow = (label, value) => {
       pdf.setFont(undefined, "normal");
       pdf.text(label, col1X, currentY);
@@ -318,15 +326,15 @@ export async function POST(req) {
       currentY += rowHeight;
     };
 
-    drawRow("Señor(es)", clienteNombre);
-    drawRow("Tipo de Documento", "DNI"); // Podrías hacerlo dinámico si tienes el dato
-    drawRow("Número de Documento", clienteDni);
-    drawRow("Fecha de Emisión", fechaEmision);
-    drawRow("Información del Crédito", ""); // Título intermedio
-    drawRow("Número del prestamo", numeroCreditoFormat);
+    drawRow("Señor(es)", resultPDF.clienteNombre);
+    const tipoDocLabel = resultPDF.clienteDni.length === 11 ? "RUC" : "DNI";
+    drawRow("Tipo de Documento", tipoDocLabel);
+    drawRow("Número de Documento", resultPDF.clienteDni);
+    drawRow("Fecha de Emisión", resultPDF.fechaEmision);
+    drawRow("Información del Crédito", "");
+    drawRow("Número del prestamo", resultPDF.numeroCreditoFormat);
     drawRow("Moneda", "SOLES");
 
-    // Tabla Detalle (Segunda tabla)
     y = tableStartY + tableHeight + 5;
     const table2StartY = y;
     const table2Height = 50;
@@ -347,7 +355,6 @@ export async function POST(req) {
       y + table2Height
     );
 
-    // Headers Tabla 2
     pdf.setFontSize(9);
     pdf.setFont(undefined, "bold");
     pdf.text("CÓDIGO DE", 18, y + 4);
@@ -355,7 +362,6 @@ export async function POST(req) {
     pdf.text("DESCRIPCIÓN", 15 + col1Width + 3, y + 5);
     pdf.text("MONTO OPERACIÓN", 15 + col1Width + col2Width + 10, y + 5);
 
-    // Datos Tabla 2
     let dataY = y + headerHeight + 5;
     pdf.setFontSize(8);
     pdf.setFont(undefined, "normal");
@@ -366,7 +372,6 @@ export async function POST(req) {
     const montoColWidth = 180 - col1Width - col2Width;
     let lineY = dataY;
 
-    // Función helper para filas de montos
     const drawAmountRow = (desc, amount, bold = false) => {
       pdf.setFont(undefined, bold ? "bold" : "normal");
       pdf.text(desc, descripcionX, lineY);
@@ -379,24 +384,25 @@ export async function POST(req) {
 
     drawAmountRow(
       "Interes de Créditos compensatorios",
-      interesPagado.toFixed(2)
+      resultPDF.interesPagado.toFixed(2)
     );
     drawAmountRow("Descuentos", "0");
-    drawAmountRow("Cargos", moraPagadaRedondeada.toFixed(2));
+    drawAmountRow("Cargos", resultPDF.moraPagadaRedondeada.toFixed(2));
     drawAmountRow("Valor de ventas operaciones exoneradas", "0.00");
     drawAmountRow(
       "Valor de ventas operaciones inafectas",
-      totalPagado.toFixed(2)
+      resultPDF.totalPagado.toFixed(2)
     );
-    drawAmountRow("Importe Total", totalPagado.toFixed(2), true);
+    drawAmountRow("Importe Total", resultPDF.totalPagado.toFixed(2), true);
 
-    // Monto en Letras
     y = table2StartY + table2Height + 5;
     pdf.setFontSize(8);
     pdf.setFont(undefined, "bold");
 
-    const parteEntera = Math.floor(totalPagado);
-    const parteDecimal = Math.round((totalPagado - parteEntera) * 100);
+    const parteEntera = Math.floor(resultPDF.totalPagado);
+    const parteDecimal = Math.round(
+      (resultPDF.totalPagado - parteEntera) * 100
+    );
     const montoEnLetras = `${numeroALetras(parteEntera)} CON ${String(
       parteDecimal
     ).padStart(2, "0")}/100 SOLES`;
@@ -405,7 +411,6 @@ export async function POST(req) {
     pdf.setFont(undefined, "normal");
     pdf.text(montoEnLetras, 30, y);
 
-    // Footer
     y += 7;
     pdf.setFontSize(8);
     pdf.setFont(undefined, "italic");
@@ -414,13 +419,12 @@ export async function POST(req) {
       align: "center",
     });
 
-    // Output
     const pdfBuffer = pdf.output("arraybuffer");
 
     return new Response(pdfBuffer, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename=comprobante_${prestamoId}_${numeroCuota}.pdf`,
+        "Content-Disposition": `attachment; filename=factura_${prestamoId}_${numeroCuota}.pdf`,
       },
       status: 200,
     });
