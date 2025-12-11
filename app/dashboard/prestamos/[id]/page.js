@@ -450,8 +450,16 @@ export default function DetallePrestamoPage() {
                   <td className="p-3 text-center flex justify-center gap-2">
                     {abonadoTotal > 0 && (
                       <button
-                        onClick={() => generarComprobante(c)}
+                        onClick={() => {
+                          const esRuc = prestamo.dniCliente && prestamo.dniCliente.length === 11;
+                          if (esRuc) {
+                            generarFactura(c);
+                          } else {
+                            generarComprobante(c);
+                          }
+                        }}
                         className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
+                        title={prestamo.dniCliente && prestamo.dniCliente.length === 11 ? "Descargar Factura" : "Descargar Comprobante"}
                       >
                         📄
                       </button>

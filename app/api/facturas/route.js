@@ -100,10 +100,16 @@ export async function POST(req) {
       ? new Date(cuotaData.dueDate).toLocaleDateString("es-PE")
       : "N/A";
 
-    // Cálculos
-    const subtotal = montoPagado;
-    const igv = subtotal * 0.18;
-    const total = subtotal + igv;
+    // 🔹 CÁLCULOS CORRECTOS: Separar Capital e Interés
+    // El interés es la GANANCIA (base gravable para IGV)
+    // El capital es INAFECTO (no paga IGV, es devolución)
+    const interes = cuotaData.interest || 0;  // Ganancia que SÍ paga IGV (en inglés en el cronograma)
+    const capital = cuotaData.capital || 0;   // Capital que NO paga IGV (inafecto)
+    
+    // Solo el interés lleva IGV del 18%
+    const valorVentaInteres = parseFloat((interes / 1.18).toFixed(2));
+    const igv = parseFloat((interes - valorVentaInteres).toFixed(2));
+    const total = montoPagado;  // Total es capital + interés
 
     // Convertir número a texto
     const numeroATexto = (num) => {
@@ -290,14 +296,23 @@ export async function POST(req) {
     // Línea horizontal
     pdf.line(10, y + 8, 200, y + 8);
 
-    // Datos del servicio
+    // 🔹 LÍNEA 1: INTERÉS (Gravado con IGV)
     y += 15;
     pdf.setFont(undefined, "normal");
     pdf.text("1.00", 15, y);
     pdf.text("UNIDAD", 45, y);
-    pdf.text("CUOTA", 80, y);
-    pdf.text(`PAGO DE CUOTA ${numeroCuota} - PRÉSTAMO`, 110, y);
-    pdf.text(subtotal.toFixed(2), 165, y);
+    pdf.text("INT-" + numeroCuota, 80, y);
+    pdf.text(`INTERÉS FINANCIERO - CUOTA ${numeroCuota}`, 110, y);
+    pdf.text(valorVentaInteres.toFixed(2), 165, y);
+    pdf.text("0.00", 188, y);
+
+    // 🔹 LÍNEA 2: CAPITAL (Inafecto - NO lleva IGV)
+    y += 5;
+    pdf.text("1.00", 15, y);
+    pdf.text("UNIDAD", 45, y);
+    pdf.text("CAP-" + numeroCuota, 80, y);
+    pdf.text(`AMORTIZACIÓN CAPITAL (INAFECTO) - CUOTA ${numeroCuota}`, 110, y);
+    pdf.text(capital.toFixed(2), 165, y);
     pdf.text("0.00", 188, y);
 
     // Línea de cierre de tabla
@@ -312,15 +327,16 @@ export async function POST(req) {
     // TOTALES
     y += 10;
     pdf.setLineWidth(0.5);
-    pdf.rect(120, y, 75, 45);
+    pdf.rect(120, y, 75, 50);
 
     const labels = [
-      "Sub Total Ventas :",
+      "Sub Total Ventas (Gravado) :",
+      "Op. Inafectas (Capital) :",
       "Anticipos :",
       "Descuentos :",
       "Valor Venta :",
       "ISC :",
-      "IGV :",
+      "IGV (18%) :",
       "ICBPER :",
       "Otros Cargos :",
       "Otros Tributos :",
@@ -329,10 +345,11 @@ export async function POST(req) {
     ];
 
     const valores = [
-      subtotal.toFixed(2),
+      valorVentaInteres.toFixed(2),
+      capital.toFixed(2),
       "0.00",
       "0.00",
-      subtotal.toFixed(2),
+      valorVentaInteres.toFixed(2),
       "0.00",
       igv.toFixed(2),
       "0.00",
@@ -351,7 +368,7 @@ export async function POST(req) {
     }
 
     // PIE DE PÁGINA
-    y += 50;
+    y += 55;
     pdf.setFontSize(8);
     pdf.setFont(undefined, "italic");
     pdf.text(
@@ -364,6 +381,13 @@ export async function POST(req) {
       "Puede verificarla utilizando el número de factura.",
       105,
       y + 10,
+      { align: "center" }
+    );
+    pdf.setFontSize(7);
+    pdf.text(
+      "* El capital amortizado es una operación inafecta según Art. 1° Ley del IGV",
+      105,
+      y + 15,
       { align: "center" }
     );
 
