@@ -1,10 +1,11 @@
 // services/reniecService.js
 export async function consultarDniReniec(dni) {
-  const URL_BASE = process.env.RENIEC_API_URL;
-  const TOKEN = process.env.RENIEC_API_TOKEN;
-
   try {
-    const response = await fetch(`${URL_BASE}?numero=${dni}`, {
+    // Usar el mismo token y proveedor que SUNAT
+    const TOKEN = "sk_10943.NTvlbCjteHH5PRdVsMqoD09kEfU6g50o";
+    const URL = `https://api.decolecta.com/v1/reniec/dni?numero=${dni}`;
+
+    const response = await fetch(URL, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${TOKEN}`,
@@ -13,27 +14,40 @@ export async function consultarDniReniec(dni) {
     });
 
     if (!response.ok) {
-      throw new Error(`Error API externa: ${response.status}`);
+      console.error(`Error API RENIEC: ${response.status}`);
+      return null;
     }
 
     const data = await response.json();
+    
+    console.log("📊 Respuesta RENIEC completa:", JSON.stringify(data, null, 2));
 
     // Adaptador para Decolecta (Mapeo Inglés -> Español)
     // A veces viene directo o dentro de 'result'
     const persona = data.result || data;
 
-    // Validación: Si no trae 'first_name', asumimos que no se encontró
-    if (!persona || !persona.first_name) return null;
+    console.log("👤 Datos de persona extraídos:", JSON.stringify(persona, null, 2));
 
-    return {
-      nombres: persona.first_name, // ANTES: persona.nombres (ERROR)
-      apellidoPaterno: persona.first_last_name, // ANTES: persona.apellidoPaterno
-      apellidoMaterno: persona.second_last_name,
+    // Validación: Si no trae 'first_name', asumimos que no se encontró
+    if (!persona || !persona.first_name) {
+      console.error("❌ No se encontró first_name en la respuesta");
+      return null;
+    }
+
+    const resultado = {
+      nombres: persona.first_name || "",
+      apellidoPaterno: persona.first_last_name || "",
+      apellidoMaterno: persona.second_last_name || "",
       dni: persona.document_number || dni,
-      nombreCompleto: persona.full_name,
+      nombreCompleto: persona.full_name || "",
+      direccion: "-", // Agregar campo direccion que falta
     };
+    
+    console.log("✅ Resultado final RENIEC:", JSON.stringify(resultado, null, 2));
+    
+    return resultado;
   } catch (error) {
-    console.error("Error consultando RENIEC:", error);
+    console.error("❌ Error consultando RENIEC:", error);
     return null;
   }
 }

@@ -30,21 +30,28 @@ export async function POST(request) {
     let datosExternos = null;
     let tipoDoc = "DNI";
 
+    console.log(`🔍 Consultando ${documento.length === 8 ? 'DNI' : 'RUC'}: ${documento}`);
+
     if (documento.length === 8) {
       tipoDoc = "DNI";
       datosExternos = await consultarDniReniec(documento);
+      console.log("📋 Datos externos RENIEC:", datosExternos);
     } else if (documento.length === 11) {
       tipoDoc = "RUC";
       datosExternos = await consultarRucSunat(documento);
+      console.log("📋 Datos externos SUNAT:", datosExternos);
     }
 
     // Si no se encuentra nada real, devolvemos error 404
     if (!datosExternos) {
+      console.error(`❌ No se encontraron datos para ${tipoDoc}: ${documento}`);
       return NextResponse.json(
         { message: `Documento (${tipoDoc}) no encontrado en padrón oficial` },
         { status: 404 }
       );
     }
+    
+    console.log("✅ Datos encontrados, procediendo a guardar...");
 
     // 3. GUARDAR EN FIREBASE
     const nuevoCliente = {
