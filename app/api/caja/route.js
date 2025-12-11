@@ -40,21 +40,20 @@ export async function GET() {
 
     const movimientosHoy = [];
 
-    // --- NUEVO: SI HAY SESIÓN, AGREGAMOS EL MONTO INICIAL COMO MOVIMIENTO ---
+    // --- APERTURA ---
     if (sesionData) {
       movimientosHoy.push({
-        id: "apertura-" + sesionData.id, // ID único artificial
-        tipo: "APERTURA", // Nuevo tipo para identificarlo
+        id: "apertura-" + sesionData.id,
+        tipo: "APERTURA",
         fechaRegistro: sesionData.fechaApertura || new Date().toISOString(),
         monto: sesionData.montoInicial,
-        montoTotal: sesionData.montoInicial, // Para compatibilidad
+        montoTotal: sesionData.montoInicial,
         medioPago: "EFECTIVO",
         descripcion: "Monto Inicial de Apertura",
       });
     }
-    // -----------------------------------------------------------------------
 
-    // 2. BUSCAR PAGOS (COBROS DE PRÉSTAMOS)
+    // 2. BUSCAR PAGOS (INGRESOS POR COBROS)
     const pagosRef = collection(db, "pagos");
     const qPagos = query(
       pagosRef,
@@ -67,9 +66,7 @@ export async function GET() {
       const data = doc.data();
       const fechaPagoPeru = new Date(data.fechaRegistro).toLocaleString(
         "en-US",
-        {
-          timeZone: "America/Lima",
-        }
+        { timeZone: "America/Lima" }
       );
       const fechaPagoObj = new Date(fechaPagoPeru);
       const year = fechaPagoObj.getFullYear();
@@ -78,43 +75,56 @@ export async function GET() {
       const fechaPagoStr = `${year}-${month}-${day}`;
 
       if (fechaPagoStr === hoyStr) {
-        // Marcamos el tipo para el frontend
         movimientosHoy.push({ id: doc.id, ...data, tipo: "PAGO" });
       }
     });
 
-    // 3. BUSCAR INGRESOS EXTRA (DINERO MANUAL)
+    // 3. BUSCAR INGRESOS EXTRA
     const ingresosRef = collection(db, "ingresos_extra");
-    // Filtramos en memoria igual que pagos para asegurar fecha exacta
     const ingresosSnap = await getDocs(ingresosRef);
 
     ingresosSnap.forEach((doc) => {
       const data = doc.data();
-      const fechaIngresoPeru = new Date(data.fechaRegistro).toLocaleString(
-        "en-US",
-        {
-          timeZone: "America/Lima",
-        }
-      );
-      const fechaObj = new Date(fechaIngresoPeru);
-      const year = fechaObj.getFullYear();
-      const month = String(fechaObj.getMonth() + 1).padStart(2, "0");
-      const day = String(fechaObj.getDate()).padStart(2, "0");
-      const fechaStr = `${year}-${month}-${day}`;
+      const fechaPeru = new Date(data.fechaRegistro).toLocaleString("en-US", {
+        timeZone: "America/Lima",
+      });
+      const fObj = new Date(fechaPeru);
+      const fStr = `${fObj.getFullYear()}-${String(
+        fObj.getMonth() + 1
+      ).padStart(2, "0")}-${String(fObj.getDate()).padStart(2, "0")}`;
 
-      if (fechaStr === hoyStr) {
+      if (fStr === hoyStr) {
         movimientosHoy.push({ id: doc.id, ...data, tipo: "INGRESO" });
       }
     });
 
-    // 4. ORDENAR TODO POR FECHA (MÁS RECIENTE PRIMERO)
+    // 4. [NUEVO] BUSCAR EGRESOS EXTRA (SALIDAS MANUALES)
+    const egresosRef = collection(db, "egresos_extra");
+    const egresosSnap = await getDocs(egresosRef);
+
+    egresosSnap.forEach((doc) => {
+      const data = doc.data();
+      const fechaPeru = new Date(data.fechaRegistro).toLocaleString("en-US", {
+        timeZone: "America/Lima",
+      });
+      const fObj = new Date(fechaPeru);
+      const fStr = `${fObj.getFullYear()}-${String(
+        fObj.getMonth() + 1
+      ).padStart(2, "0")}-${String(fObj.getDate()).padStart(2, "0")}`;
+
+      if (fStr === hoyStr) {
+        movimientosHoy.push({ id: doc.id, ...data, tipo: "EGRESO" });
+      }
+    });
+
+    // 5. ORDENAR TODO POR FECHA
     movimientosHoy.sort(
       (a, b) => new Date(b.fechaRegistro) - new Date(a.fechaRegistro)
     );
 
     return NextResponse.json({
       sesion: sesionData,
-      pagos: movimientosHoy, // Enviamos la lista combinada
+      pagos: movimientosHoy,
     });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -131,6 +141,8 @@ export async function POST(req) {
       sesionId,
       montoIngreso,
       descripcionIngreso,
+      montoEgreso,
+      descripcionEgreso,
     } = body;
     const hoyStr = getFechaPeru();
 
@@ -147,26 +159,21 @@ export async function POST(req) {
         );
       }
 
-      const nuevaSesion = {
+      const docRef = await addDoc(sesionesRef, {
         fecha: hoyStr,
         estado: "ABIERTA",
         montoInicial: parseFloat(montoInicial || 0),
         montoFinal: 0,
         fechaApertura: new Date().toISOString(),
         usuario: "admin",
-      };
-
-      const docRef = await addDoc(sesionesRef, nuevaSesion);
+      });
       return NextResponse.json({ ok: true, id: docRef.id });
     }
 
     // --- CERRAR CAJA ---
     if (action === "CERRAR") {
       if (!sesionId)
-        return NextResponse.json(
-          { error: "Falta ID de sesión" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Falta ID" }, { status: 400 });
       const sesionRef = doc(db, "sesiones_caja", sesionId);
       await updateDoc(sesionRef, {
         estado: "CERRADA",
@@ -176,25 +183,33 @@ export async function POST(req) {
       return NextResponse.json({ ok: true });
     }
 
-    // --- NUEVO: INGRESAR DINERO EXTRA ---
+    // --- INGRESO MANUAL ---
     if (action === "INGRESO") {
-      if (!montoIngreso || !descripcionIngreso) {
-        return NextResponse.json(
-          { error: "Faltan datos de ingreso" },
-          { status: 400 }
-        );
-      }
-
-      const ingresosRef = collection(db, "ingresos_extra");
-      const nuevoIngreso = {
+      if (!montoIngreso)
+        return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
+      const colRef = collection(db, "ingresos_extra");
+      await addDoc(colRef, {
         monto: parseFloat(montoIngreso),
         descripcion: descripcionIngreso,
-        fechaRegistro: new Date().toISOString(), // Se guarda en UTC, el GET lo convierte
+        fechaRegistro: new Date().toISOString(),
         usuario: "admin",
-        medioPago: "EFECTIVO", // Asumimos efectivo para caja chica
-      };
+        medioPago: "EFECTIVO",
+      });
+      return NextResponse.json({ ok: true });
+    }
 
-      await addDoc(ingresosRef, nuevoIngreso);
+    // --- EGRESO MANUAL (SALIDAS) ---
+    if (action === "EGRESO") {
+      if (!montoEgreso)
+        return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
+      const colRef = collection(db, "egresos_extra");
+      await addDoc(colRef, {
+        monto: parseFloat(montoEgreso),
+        descripcion: descripcionEgreso,
+        fechaRegistro: new Date().toISOString(),
+        usuario: "admin",
+        medioPago: "EFECTIVO",
+      });
       return NextResponse.json({ ok: true });
     }
 
