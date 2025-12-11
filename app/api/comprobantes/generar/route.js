@@ -16,57 +16,96 @@ import {
 
 // Función para convertir números a letras
 function numeroALetras(num) {
-  const unidades = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE'];
-  const decenas = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
-  const especiales = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISEIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
-  const centenas = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+  const unidades = [
+    "",
+    "UNO",
+    "DOS",
+    "TRES",
+    "CUATRO",
+    "CINCO",
+    "SEIS",
+    "SIETE",
+    "OCHO",
+    "NUEVE",
+  ];
+  const decenas = [
+    "",
+    "",
+    "VEINTE",
+    "TREINTA",
+    "CUARENTA",
+    "CINCUENTA",
+    "SESENTA",
+    "SETENTA",
+    "OCHENTA",
+    "NOVENTA",
+  ];
+  const especiales = [
+    "DIEZ",
+    "ONCE",
+    "DOCE",
+    "TRECE",
+    "CATORCE",
+    "QUINCE",
+    "DIECISEIS",
+    "DIECISIETE",
+    "DIECIOCHO",
+    "DIECINUEVE",
+  ];
+  const centenas = [
+    "",
+    "CIENTO",
+    "DOSCIENTOS",
+    "TRESCIENTOS",
+    "CUATROCIENTOS",
+    "QUINIENTOS",
+    "SEISCIENTOS",
+    "SETECIENTOS",
+    "OCHOCIENTOS",
+    "NOVECIENTOS",
+  ];
 
-  if (num === 0) return 'CERO';
-  if (num === 100) return 'CIEN';
-  
-  let resultado = '';
-  
+  if (num === 0) return "CERO";
+  if (num === 100) return "CIEN";
+
+  let resultado = "";
+
   // Miles
   if (num >= 1000) {
     const miles = Math.floor(num / 1000);
     if (miles === 1) {
-      resultado += 'MIL ';
+      resultado += "MIL ";
     } else {
-      resultado += numeroALetras(miles) + ' MIL ';
+      resultado += numeroALetras(miles) + " MIL ";
     }
     num %= 1000;
   }
-  
+
   // Centenas
   if (num >= 100) {
-    resultado += centenas[Math.floor(num / 100)] + ' ';
+    resultado += centenas[Math.floor(num / 100)] + " ";
     num %= 100;
   }
-  
+
   // Decenas y unidades
   if (num >= 20) {
     resultado += decenas[Math.floor(num / 10)];
     if (num % 10 > 0) {
-      resultado += ' Y ' + unidades[num % 10];
+      resultado += " Y " + unidades[num % 10];
     }
   } else if (num >= 10) {
     resultado += especiales[num - 10];
   } else if (num > 0) {
     resultado += unidades[num];
   }
-  
+
   return resultado.trim();
 }
 
 export async function POST(req) {
   try {
     const body = await req.json();
-    const {
-      prestamoId,
-      numeroCuota,
-      monto,
-      cliente: clienteBody,
-    } = body;
+    const { prestamoId, numeroCuota, monto, cliente: clienteBody } = body;
 
     if (!prestamoId || !numeroCuota) {
       return NextResponse.json(
@@ -131,27 +170,30 @@ export async function POST(req) {
     const interesTotal = prestamoData.totalIntereses || 0;
     const totalCuotas = prestamoData.numeroCuotas || 0;
 
-    // Datos de la cuota
-    const fechaEmision = new Date().toLocaleDateString('es-PE');
+    const fechaEmision = new Date().toLocaleDateString("es-PE", {
+      timeZone: "America/Lima",
+    });
     const capitalPagado = cuotaData.capitalPagado || 0;
     const capitalPendiente = Math.max(0, cuotaData.amount - capitalPagado);
     const moraPagada = cuotaData.moraPagada || 0;
     const interesOriginal = cuotaData.interest || 0;
 
-    // Función para redondear a la décima más cercana (0.10)
     const redondearADecima = (valor) => {
       return Math.round(valor * 10) / 10;
     };
 
-    // Calcular componentes del pago - SIN redondear el interés
     const interesPagado = Math.min(capitalPagado, interesOriginal); // Sin redondeo
-    const amortizacionPagada = redondearADecima(capitalPagado - Math.min(capitalPagado, interesOriginal));
+    const amortizacionPagada = redondearADecima(
+      capitalPagado - Math.min(capitalPagado, interesOriginal)
+    );
     const moraPagadaRedondeada = redondearADecima(moraPagada);
-    
+
     // Calcular el total según tipo de pago
-    const subtotal = redondearADecima(interesPagado + amortizacionPagada + moraPagadaRedondeada);
+    const subtotal = redondearADecima(
+      interesPagado + amortizacionPagada + moraPagadaRedondeada
+    );
     let totalPagado = subtotal;
-    
+
     if (medioPagoReal === "EFECTIVO" || medioPagoReal === "Efectivo") {
       totalPagado = redondearADecima(subtotal);
     }
@@ -159,30 +201,32 @@ export async function POST(req) {
     // Generar número de comprobante secuencial
     const contadorRef = doc(db, "contadores", "comprobantes");
     let numeroComprobante = "";
-    
+
     try {
       await runTransaction(db, async (transaction) => {
         const contadorDoc = await transaction.get(contadorRef);
         let siguienteNumero = 1;
-        
+
         if (contadorDoc.exists()) {
           siguienteNumero = (contadorDoc.data().ultimo || 0) + 1;
         }
-        
+
         // Actualizar el contador
         transaction.set(contadorRef, { ultimo: siguienteNumero });
-        
+
         // Formato: F + número con 3 dígitos + guion + número correlativo de 6 dígitos
-        const serie = String(siguienteNumero).padStart(3, '0');
-        const correlativo = String(siguienteNumero).padStart(6, '0');
+        const serie = String(siguienteNumero).padStart(3, "0");
+        const correlativo = String(siguienteNumero).padStart(6, "0");
         numeroComprobante = `F${serie}-${correlativo}`;
       });
     } catch (error) {
       console.error("Error generando número de comprobante:", error);
       // Fallback en caso de error
-      numeroComprobante = `F014-${String(Math.floor(Math.random() * 900000) + 100000)}`;
+      numeroComprobante = `F014-${String(
+        Math.floor(Math.random() * 900000) + 100000
+      )}`;
     }
-    
+
     const numeroCreditoFormat = prestamoId;
 
     // --- GENERACIÓN DEL PDF ---
@@ -213,19 +257,25 @@ export async function POST(req) {
     const boxY = 15;
     const boxWidth = 70;
     const boxHeight = 35;
-    
+
     pdf.setLineWidth(0.5);
     pdf.rect(boxX, boxY, boxWidth, boxHeight);
-    
+
     pdf.setFontSize(9);
     pdf.setFont(undefined, "normal");
     let textY = boxY + 7;
-    pdf.text("RUC 20721834495", boxX + boxWidth/2, textY, { align: "center" });
+    pdf.text("RUC 20721834495", boxX + boxWidth / 2, textY, {
+      align: "center",
+    });
     textY += 6;
-    pdf.text("COMPROBANTE SISTEMA FINANCIERO", boxX + boxWidth/2, textY, { align: "center" });
+    pdf.text("COMPROBANTE SISTEMA FINANCIERO", boxX + boxWidth / 2, textY, {
+      align: "center",
+    });
     textY += 6;
     pdf.setFont(undefined, "bold");
-    pdf.text(`Nro ${numeroComprobante}`, boxX + boxWidth/2, textY, { align: "center" });
+    pdf.text(`Nro ${numeroComprobante}`, boxX + boxWidth / 2, textY, {
+      align: "center",
+    });
 
     // Línea separadora
     y = 60;
@@ -243,10 +293,15 @@ export async function POST(req) {
     pdf.setLineWidth(0.3);
     const tableHeight = rowHeight * 7;
     pdf.rect(15, tableStartY - 4, 180, tableHeight);
-    
+
     // Líneas horizontales
     for (let i = 1; i <= 7; i++) {
-      pdf.line(15, tableStartY - 4 + (rowHeight * i), 195, tableStartY - 4 + (rowHeight * i));
+      pdf.line(
+        15,
+        tableStartY - 4 + rowHeight * i,
+        195,
+        tableStartY - 4 + rowHeight * i
+      );
     }
 
     // Línea vertical central
@@ -254,7 +309,7 @@ export async function POST(req) {
 
     // Llenar datos
     let currentY = tableStartY + 1;
-    
+
     pdf.setFontSize(9);
     pdf.setFont(undefined, "normal");
     pdf.text("Señor(es)", col1X, currentY);
@@ -301,18 +356,23 @@ export async function POST(req) {
     const table2Height = 50;
     pdf.setLineWidth(0.3);
     pdf.rect(15, y, 180, table2Height);
-    
+
     // Headers de la tabla - línea horizontal después de headers
     const headerHeight = 8;
     pdf.line(15, y + headerHeight, 195, y + headerHeight);
-    
+
     // Líneas verticales
-    const col1Width = 50;  // CÓDIGO DE PRODUCTO SUNAT - más estrecha
-    const col2Width = 75;  // DESCRIPCIÓN - más ancha
+    const col1Width = 50; // CÓDIGO DE PRODUCTO SUNAT - más estrecha
+    const col2Width = 75; // DESCRIPCIÓN - más ancha
     // El resto es MONTO OPERACIÓN
-    
+
     pdf.line(15 + col1Width, y, 15 + col1Width, y + table2Height);
-    pdf.line(15 + col1Width + col2Width, y, 15 + col1Width + col2Width, y + table2Height);
+    pdf.line(
+      15 + col1Width + col2Width,
+      y,
+      15 + col1Width + col2Width,
+      y + table2Height
+    );
 
     pdf.setFontSize(9);
     pdf.setFont(undefined, "bold");
@@ -326,60 +386,73 @@ export async function POST(req) {
     pdf.setFontSize(8);
     pdf.setFont(undefined, "normal");
     pdf.text("2100", 18, dataY);
-    
+
     // Columna DESCRIPCIÓN - todos los campos ordenados
     const descripcionX = 15 + col1Width + 3;
     const montoColX = 15 + col1Width + col2Width;
     const montoColWidth = 180 - col1Width - col2Width;
-    
+
     let lineY = dataY;
-    
+
     // 1. Interes de Créditos compensatorios
     pdf.text("Interes de Créditos compensatorios", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
-    pdf.text(interesPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, { align: "right" });
+    pdf.text(interesPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, {
+      align: "right",
+    });
     lineY += 5;
-    
+
     // 2. Descuentos
     pdf.text("Descuentos", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
     pdf.text("0", montoColX + montoColWidth - 5, lineY, { align: "right" });
     lineY += 5;
-    
+
     // 3. Cargos (MORA)
     pdf.text("Cargos", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
-    pdf.text(moraPagadaRedondeada.toFixed(2), montoColX + montoColWidth - 5, lineY, { align: "right" });
+    pdf.text(
+      moraPagadaRedondeada.toFixed(2),
+      montoColX + montoColWidth - 5,
+      lineY,
+      { align: "right" }
+    );
     lineY += 5;
-    
+
     // 4. Valor de ventas operaciones exoneradas
     pdf.text("Valor de ventas operaciones exoneradas", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
     pdf.text("0.00", montoColX + montoColWidth - 5, lineY, { align: "right" });
     lineY += 5;
-    
+
     // 5. Valor de ventas operaciones inafectas
     pdf.text("Valor de ventas operaciones inafectas", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
-    pdf.text(totalPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, { align: "right" });
+    pdf.text(totalPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, {
+      align: "right",
+    });
     lineY += 5;
-    
+
     // 6. Importe Total
     pdf.setFont(undefined, "bold");
     pdf.text("Importe Total", descripcionX, lineY);
     pdf.text("S/", montoColX + montoColWidth - 20, lineY);
-    pdf.text(totalPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, { align: "right" });
+    pdf.text(totalPagado.toFixed(2), montoColX + montoColWidth - 5, lineY, {
+      align: "right",
+    });
     pdf.setFont(undefined, "normal");
 
     // SON: Monto en letras
     y = table2StartY + table2Height + 5;
     pdf.setFontSize(8);
     pdf.setFont(undefined, "bold");
-    
+
     const parteEntera = Math.floor(totalPagado);
     const parteDecimal = Math.round((totalPagado - parteEntera) * 100);
-    const montoEnLetras = `${numeroALetras(parteEntera)} CON ${String(parteDecimal).padStart(2, '0')}/100 SOLES`;
-    
+    const montoEnLetras = `${numeroALetras(parteEntera)} CON ${String(
+      parteDecimal
+    ).padStart(2, "0")}/100 SOLES`;
+
     pdf.text("SON:", 15, y);
     pdf.setFont(undefined, "normal");
     pdf.text(montoEnLetras, 30, y);
@@ -389,7 +462,9 @@ export async function POST(req) {
     pdf.setFontSize(8);
     pdf.setFont(undefined, "italic");
     const validationUrl = "https://final-agile.vercel.app/dashboard";
-    pdf.text(`Este documento puede ser válido en ${validationUrl}`, 105, y, { align: "center" });
+    pdf.text(`Este documento puede ser válido en ${validationUrl}`, 105, y, {
+      align: "center",
+    });
 
     const pdfBuffer = pdf.output("arraybuffer");
 
