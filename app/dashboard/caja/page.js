@@ -362,7 +362,7 @@ export default function CuadreCajaPage() {
         <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-blue-600">
           <div className="flex justify-between items-center mb-1">
             <p className="text-xs text-gray-500 uppercase font-bold">
-              Ventas Totales
+              Pagos Totales
             </p>
             <Wallet className="text-blue-500 opacity-50" size={20} />
           </div>
