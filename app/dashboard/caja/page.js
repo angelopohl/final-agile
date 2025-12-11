@@ -56,6 +56,7 @@ export default function CuadreCajaPage() {
       let vIngresosExtra = 0;
 
       (data.pagos || []).forEach((p) => {
+        // No sumamos APERTURA aquí porque ya está en 'sesion.montoInicial'
         if (p.tipo === "PAGO") {
           const monto = Number(p.montoTotal || 0);
           vTotal += monto;
@@ -179,7 +180,6 @@ export default function CuadreCajaPage() {
 
     const valor = Number(montoIngreso);
 
-    // --- VALIDACIÓN 1: LÍMITES ---
     if (valor > 999999) {
       return alert("El monto no puede superar 999,999.00");
     }
@@ -187,14 +187,9 @@ export default function CuadreCajaPage() {
       return alert("El monto debe ser mayor a 0");
     }
 
-    // --- VALIDACIÓN 2: SOLO MÚLTIPLOS DE 0.10 ---
-    // Multiplicamos por 10. Si el resultado no es entero, tiene céntimos extra.
-    // Ej: 1.30 * 10 = 13 (Entero) -> OK
-    // Ej: 1.33 * 10 = 13.3 (Decimal) -> ERROR
-    // Usamos toFixed(1) para evitar errores de punto flotante (ej 1.2 * 3)
     if ((valor * 10) % 1 !== 0) {
       return alert(
-        "Solo se permiten montos múltiplos de 10 céntimos (Ej: 1.30, 5.50). No ingrese céntimos sueltos como 0.01 o 0.03."
+        "Solo se permiten montos múltiplos de 10 céntimos (Ej: 1.30, 5.50)."
       );
     }
 
@@ -343,9 +338,9 @@ export default function CuadreCajaPage() {
         </div>
       </div>
 
-      {/* Tarjetas Resumen - 4 COLUMNAS */}
+      {/* Tarjetas Resumen */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 1. EFECTIVO EN CAJÓN (Redondeado) */}
+        {/* 1. EFECTIVO EN CAJÓN */}
         <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-600 relative overflow-hidden">
           <div className="relative z-10">
             <p className="text-xs text-gray-500 uppercase font-bold tracking-wide">
@@ -363,7 +358,7 @@ export default function CuadreCajaPage() {
           </div>
         </div>
 
-        {/* 2. VENTAS TOTALES (AHORA REDONDEADO) */}
+        {/* 2. VENTAS TOTALES */}
         <div className="bg-white p-5 rounded-xl shadow-md border-l-4 border-blue-600">
           <div className="flex justify-between items-center mb-1">
             <p className="text-xs text-gray-500 uppercase font-bold">
@@ -374,7 +369,6 @@ export default function CuadreCajaPage() {
           <h2 className="text-3xl font-bold text-blue-700">
             S/ {resumen.ventasTotal.toFixed(2)}
           </h2>
-          {/* Etiqueta visual agregada para coherencia */}
           <div className="mt-1 text-[10px] text-blue-700 bg-blue-50 inline-block px-2 py-1 rounded">
             (Redondeado)
           </div>
@@ -438,17 +432,27 @@ export default function CuadreCajaPage() {
             <tbody className="divide-y divide-gray-100">
               {movimientos.map((m) => {
                 const esPago = m.tipo === "PAGO";
+                const esApertura = m.tipo === "APERTURA";
+
                 return (
                   <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                    {/* --- AQUÍ ESTÁ LA CORRECCIÓN DE HORA APLICADA --- */}
                     <td className="p-4 font-mono text-gray-500">
-                      {new Date(m.fechaRegistro).toLocaleTimeString([], {
+                      {new Date(m.fechaRegistro).toLocaleTimeString("es-PE", {
                         hour: "2-digit",
                         minute: "2-digit",
+                        hour12: true,
                         timeZone: "America/Lima",
                       })}
                     </td>
+                    {/* ----------------------------------------------- */}
+
                     <td className="p-4 font-medium text-gray-700">
-                      {esPago ? (
+                      {esApertura ? (
+                        <span className="text-gray-800 font-bold bg-gray-200 px-2 py-1 rounded text-xs">
+                          APERTURA
+                        </span>
+                      ) : esPago ? (
                         m.dniCliente
                       ) : (
                         <span className="text-blue-600 font-bold">
@@ -457,7 +461,11 @@ export default function CuadreCajaPage() {
                       )}
                     </td>
                     <td className="p-4 text-gray-600">
-                      {esPago ? (
+                      {esApertura ? (
+                        <span className="italic text-gray-500">
+                          Saldo inicial en caja
+                        </span>
+                      ) : esPago ? (
                         <>
                           Cuota {m.numeroCuota}{" "}
                           {m.desglose?.mora > 0 && (
@@ -471,7 +479,9 @@ export default function CuadreCajaPage() {
                     <td className="p-4 text-center">
                       <span
                         className={`px-2 py-1 text-[10px] font-bold rounded-full uppercase tracking-wide ${
-                          m.medioPago === "EFECTIVO" || !esPago
+                          esApertura
+                            ? "bg-gray-100 text-gray-600 border border-gray-300"
+                            : m.medioPago === "EFECTIVO" || !esPago
                             ? "bg-green-100 text-green-700 border border-green-200"
                             : "bg-purple-100 text-purple-700 border border-purple-200"
                         }`}
@@ -515,8 +525,8 @@ export default function CuadreCajaPage() {
                     onChange={(e) => setMontoIngreso(e.target.value)}
                     className="w-full pl-8 p-2 border rounded font-bold text-lg focus:ring-2 ring-green-500 outline-none"
                     placeholder="0.00"
-                    step="0.1" // Paso de 0.1 para sugerir múltiplos
-                    max="999999" // Límite en HTML
+                    step="0.1"
+                    max="999999"
                   />
                 </div>
               </div>

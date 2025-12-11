@@ -38,6 +38,22 @@ export async function GET() {
       sesionData = { id: d.id, ...d.data() };
     }
 
+    const movimientosHoy = [];
+
+    // --- NUEVO: SI HAY SESIÓN, AGREGAMOS EL MONTO INICIAL COMO MOVIMIENTO ---
+    if (sesionData) {
+      movimientosHoy.push({
+        id: "apertura-" + sesionData.id, // ID único artificial
+        tipo: "APERTURA", // Nuevo tipo para identificarlo
+        fechaRegistro: sesionData.fechaApertura || new Date().toISOString(),
+        monto: sesionData.montoInicial,
+        montoTotal: sesionData.montoInicial, // Para compatibilidad
+        medioPago: "EFECTIVO",
+        descripcion: "Monto Inicial de Apertura",
+      });
+    }
+    // -----------------------------------------------------------------------
+
     // 2. BUSCAR PAGOS (COBROS DE PRÉSTAMOS)
     const pagosRef = collection(db, "pagos");
     const qPagos = query(
@@ -46,8 +62,6 @@ export async function GET() {
       limit(100)
     );
     const pagosSnap = await getDocs(qPagos);
-
-    const movimientosHoy = [];
 
     pagosSnap.forEach((doc) => {
       const data = doc.data();

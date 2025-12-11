@@ -37,23 +37,22 @@ export async function POST(request) {
       const cuota = cronograma[cuotaIndex];
 
       // ============================
-      // [MEJORA] DEFINIR HORA PERÚ
+      // [CORRECCIÓN] FECHA STANDARD
       // ============================
-      // Esto congela la hora actual en Lima para guardarla en la BD
-      const fechaActualPeru = new Date(
-        new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
-      );
-      const fechaActualISO = fechaActualPeru.toISOString();
+      // Guardamos la hora exacta UTC del servidor.
+      // El Frontend se encargará de restarle las 5 horas para mostrarla en Perú.
+      const fechaActualISO = new Date().toISOString();
 
       // ============================
-      // 2. CÁLCULO DE MORA (Tu lógica matemática robusta)
+      // 2. CÁLCULO DE MORA
       // ============================
-      // Usamos la hora de Perú también para comparar si venció o no
-      const hoy = new Date(
-        new Date().toLocaleString("en-US", { timeZone: "America/Lima" })
-      );
-      
-      // Normalizar fechas para evitar errores de horas
+      // Para comparar vencimientos, sí necesitamos saber qué día es en Perú hoy
+      const hoyPeru = new Date().toLocaleString("en-US", {
+        timeZone: "America/Lima",
+      });
+      const hoy = new Date(hoyPeru);
+
+      // Normalizar fechas a media noche
       hoy.setHours(0, 0, 0, 0);
       const fechaVencimiento = new Date(cuota.dueDate);
       fechaVencimiento.setHours(0, 0, 0, 0);
@@ -62,24 +61,15 @@ export async function POST(request) {
       const moraCongeladaPrevia = cuota.moraCongelada || 0;
 
       let moraActiva = 0;
-      let diasAtraso = 0;
 
       if (hoy > fechaVencimiento && capitalPendiente > 0.01) {
-        const msPorDia = 1000 * 60 * 60 * 24;
-        const diff = hoy - fechaVencimiento;
-        diasAtraso = Math.ceil(diff / msPorDia);
-
         // LÓGICA: 1% FIJO por cuota vencida
-        // Si la cuota está vencida (diasAtraso > 0), cobra 1% del monto de la cuota
-        // NO se acumula por meses, es un cargo fijo del 1% por cuota vencida
         const TASA_MORA = 0.01;
         moraActiva = cuota.amount * TASA_MORA;
       }
 
-      // Mora Total Generada = Lo activo hoy + Lo histórico congelado
       const moraTotalGenerada = moraActiva + moraCongeladaPrevia;
 
-      // Deuda neta de mora
       const moraPendienteAPagar = Math.max(
         0,
         moraTotalGenerada - (cuota.moraPagada || 0)
@@ -91,10 +81,7 @@ export async function POST(request) {
       let pagoParaCapital = 0;
       let remanente = montoTotalAPagar;
 
-      // ============================
       // 3. DISTRIBUCIÓN DEL PAGO
-      // ============================
-
       // A) Pagar mora primero
       if (moraPendienteAPagar > 0) {
         if (remanente >= moraPendienteAPagar) {
@@ -108,7 +95,6 @@ export async function POST(request) {
 
       // B) Pagar capital después
       if (remanente > 0) {
-        // Validamos no pagar más del capital pendiente
         if (remanente >= capitalPendiente) {
           pagoParaCapital = capitalPendiente;
         } else {
@@ -116,59 +102,41 @@ export async function POST(request) {
         }
       }
 
-      // ============================
-      // 4. LÓGICA DE CONGELAMIENTO (Simplificada para mora por cuota)
-      // ============================
-      let nuevaMoraCongelada = moraCongeladaPrevia;
-
-      // Con el nuevo modelo, la mora se calcula directamente sobre el monto de cuota
-      // No necesitamos congelar mora proporcional al capital pagado
-      // La mora se paga completa o se acumula
-
+      // 4. LÓGICA DE ACTUALIZACIÓN
       const nuevoCapitalPagado = (cuota.capitalPagado || 0) + pagoParaCapital;
       const nuevaMoraPagada = (cuota.moraPagada || 0) + pagoParaMora;
 
-      // Considerar pagado si la diferencia es menor a 0.10 (margen de redondeo para efectivo)
       const capitalRestante = cuota.amount - nuevoCapitalPagado;
       const moraRestante = moraTotalGenerada - nuevaMoraPagada;
-      const isPaid = capitalRestante < 0.10 && moraRestante < 0.10;
+      // Tolerancia de 0.10 para errores de punto flotante
+      const isPaid = capitalRestante < 0.1 && moraRestante < 0.1;
 
-      // Estado de la CUOTA (Este es solo visual para la tabla)
       const estadoCuota = isPaid
         ? "PAGADO"
         : nuevoCapitalPagado > 0 || nuevaMoraPagada > 0
         ? "PARCIAL"
         : "PENDIENTE";
 
-      // ============================
       // 5. ACTUALIZAR CUOTA EN ARRAY
-      // ============================
       cronograma[cuotaIndex] = {
         ...cuota,
         estado: estadoCuota,
-        fechaUltimoPago: fechaActualISO, // <--- CAMBIO 1: Fecha Perú
+        fechaUltimoPago: fechaActualISO, // Usamos la fecha UTC corregida
         capitalPagado: nuevoCapitalPagado,
         moraPagada: nuevaMoraPagada,
-        // Guardamos el nuevo campo vital
-        moraCongelada: nuevaMoraCongelada,
-        // Campo informativo
+        moraCongelada: moraCongeladaPrevia, // Mantenemos la mora histórica
         moraCalculadaTotal: moraTotalGenerada,
       };
 
-      // ============================
-      // 6. ACTUALIZAR ESTADO DEL PRÉSTAMO (LÓGICA DE AMIGO)
-      // ============================
+      // 6. ACTUALIZAR ESTADO DEL PRÉSTAMO
       const prestamoFinalizado = cronograma.every((c) => c.estado === "PAGADO");
 
       transaction.update(prestamoRef, {
         cronograma,
-        // CAMBIO CRÍTICO: Si no finalizó, se mantiene PENDIENTE (nunca VIGENTE)
         estado: prestamoFinalizado ? "FINALIZADO" : "PENDIENTE",
       });
 
-      // ============================
       // 7. CREAR RECIBO DE CAJA
-      // ============================
       const pagoRef = doc(collection(db, "pagos"));
       const nuevoPago = {
         id: pagoRef.id,
@@ -182,7 +150,7 @@ export async function POST(request) {
         },
         medioPago,
         montoRecibido: montoRecibido || montoPagado,
-        fechaRegistro: fechaActualISO, // <--- CAMBIO 2: Fecha Perú
+        fechaRegistro: fechaActualISO, // Usamos la fecha UTC corregida
         usuarioCajero: "admin",
       };
 
