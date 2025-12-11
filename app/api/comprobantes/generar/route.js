@@ -102,7 +102,7 @@ export async function POST(req) {
 
     const cuotaNumero = Number(numeroCuota);
     console.log(
-      `🔍 Generando FACTURA - ID: ${prestamoId}, Cuota: ${cuotaNumero}`
+      `🔍 Generando BOLETA - ID: ${prestamoId}, Cuota: ${cuotaNumero}`
     );
 
     // 1. BUSCAR EL DOCUMENTO DE PAGO
@@ -133,7 +133,7 @@ export async function POST(req) {
     const prestamoRef = doc(db, "prestamos", prestamoId);
     const contadorRef = doc(db, "contadores", "comprobantes");
 
-    // 3. TRANSACCIÓN ROBUSTA (Con SET MERGE para forzar guardado)
+    // 3. TRANSACCIÓN
     let resultPDF = null;
 
     await runTransaction(db, async (transaction) => {
@@ -156,13 +156,11 @@ export async function POST(req) {
       const cuotaData = cronograma[indexCuota];
 
       // --- LÓGICA DE NÚMERO ---
-      // Revisamos si YA existe en el pago o en la cuota
       let numeroComprobante =
         pagoData.numeroComprobante || cuotaData.numeroComprobante || null;
 
       if (numeroComprobante) {
-        console.log("♻️ Factura YA EXISTE:", numeroComprobante);
-        // Sincronización defensiva: Si falta en el pago, lo ponemos a la fuerza
+        console.log("♻️ Boleta YA EXISTE:", numeroComprobante);
         if (!pagoData.numeroComprobante) {
           transaction.set(pagoDocRef, { numeroComprobante }, { merge: true });
         }
@@ -176,23 +174,19 @@ export async function POST(req) {
 
         const serie = String(siguienteNumero).padStart(3, "0");
         const correlativo = String(siguienteNumero).padStart(6, "0");
+        // Para boletas podrías usar 'B' si quisieras diferenciar, pero mantengo tu lógica original 'F'
+        // Si quieres diferenciar: numeroComprobante = `B${serie}-${correlativo}`;
         numeroComprobante = `F${serie}-${correlativo}`;
 
-        console.log("🆕 Creando NUEVA Factura:", numeroComprobante);
+        console.log("🆕 Creando NUEVA Boleta:", numeroComprobante);
 
-        // --- GUARDADO CRÍTICO ---
-        // 1. Contador
+        // --- GUARDADO ---
         transaction.set(contadorRef, { ultimo: siguienteNumero });
-
-        // 2. Pago (Factura) - USAMOS SET MERGE (La solución clave)
-        // Esto asegura que se escriba el campo sí o sí, sin fallar si el doc es "nuevo"
         transaction.set(
           pagoDocRef,
           { numeroComprobante: numeroComprobante },
           { merge: true }
         );
-
-        // 3. Préstamo (Cronograma)
         cronograma[indexCuota].numeroComprobante = numeroComprobante;
         transaction.update(prestamoRef, { cronograma });
       }
@@ -210,28 +204,36 @@ export async function POST(req) {
       const capitalPagado = cuotaData.capitalPagado || 0;
       const moraPagada = cuotaData.moraPagada || 0;
       const interesOriginal = cuotaData.interest || 0;
-      const redondearADecima = (valor) => Math.round(valor * 10) / 10;
+
+      // === CORRECCIÓN AQUÍ: REDONDEO A 2 DECIMALES ===
+      const redondearDosDecimales = (valor) => Math.round(valor * 100) / 100;
 
       const interesPagado = Math.min(capitalPagado, interesOriginal);
-      const amortizacionPagada = redondearADecima(
+
+      // Calculamos amortización con 2 decimales de precisión
+      const amortizacionPagada = redondearDosDecimales(
         capitalPagado - Math.min(capitalPagado, interesOriginal)
       );
-      const moraPagadaRedondeada = redondearADecima(moraPagada);
+      const moraPagadaRedondeada = redondearDosDecimales(moraPagada);
 
-      let subtotal = redondearADecima(
+      // Subtotal con 2 decimales
+      let subtotal = redondearDosDecimales(
         interesPagado + amortizacionPagada + moraPagadaRedondeada
       );
-      let totalPagado = subtotal;
 
-      // Respetar monto real pagado si existe
-      if (pagoData.montoRecibido) {
-        // Lógica opcional si quieres usar el monto exacto del recibo
-      }
+      // Priorizamos el monto REAL guardado en el pago para que no haya descuadres
+      let totalPagado = pagoData.montoTotal
+        ? parseFloat(pagoData.montoTotal)
+        : subtotal;
+
+      // Si es efectivo y quieres mantener la lógica de redondeo a décimas visualmente para el TOTAL
       if (
         pagoData.medioPago === "EFECTIVO" ||
         pagoData.medioPago === "Efectivo"
       ) {
-        totalPagado = redondearADecima(subtotal);
+        totalPagado = Math.round(totalPagado * 10) / 10;
+      } else {
+        totalPagado = redondearDosDecimales(totalPagado);
       }
 
       resultPDF = {
@@ -424,7 +426,7 @@ export async function POST(req) {
     return new Response(pdfBuffer, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename=factura_${prestamoId}_${numeroCuota}.pdf`,
+        "Content-Disposition": `attachment; filename=comprobante_${prestamoId}_${numeroCuota}.pdf`,
       },
       status: 200,
     });
