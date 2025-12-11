@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { jsPDF } from "jspdf";
 import { generarPDFCronograma } from "@/lib/pdfGenerator";
 
 export default function DetallePrestamoPage() {
@@ -20,7 +19,7 @@ export default function DetallePrestamoPage() {
   const [medioPago, setMedioPago] = useState("EFECTIVO");
   const [procesando, setProcesando] = useState(false);
 
-  // --- FUNCIÓN DE REDONDEO (0.05 -> 0.10, 0.04 -> 0.00) ---
+  // --- FUNCIÓN DE REDONDEO ---
   const redondearEfectivo = (valor) => {
     return (Math.round(valor * 10) / 10).toFixed(2);
   };
@@ -65,7 +64,7 @@ export default function DetallePrestamoPage() {
     if (id) {
       fetchPrestamo();
 
-      // Verificar si viene de un pago exitoso
+      // Verificar si viene de un pago exitoso (Flow redirecciona aquí)
       const pagoExitoso = searchParams.get("pagoExitoso");
       const numeroCuotaPagada = searchParams.get("cuota");
 
@@ -86,7 +85,7 @@ export default function DetallePrestamoPage() {
     }
   }, [id, searchParams, prestamo]);
 
-  // --- LÓGICA DE ACTUALIZACIÓN DE MONTO AL CAMBIAR MEDIO DE PAGO ---
+  // Actualizar monto al cambiar medio de pago
   useEffect(() => {
     if (cuotaSeleccionada) {
       const desglose = calcularDesglosePago(cuotaSeleccionada);
@@ -100,7 +99,7 @@ export default function DetallePrestamoPage() {
     }
   }, [medioPago]);
 
-  // --- AQUÍ ESTÁ EL CAMBIO DE LÓGICA DE MORA ---
+  // --- CÁLCULO DE MORA ---
   const calcularDesglosePago = (cuota) => {
     if (!cuota) return { capital: 0, mora: 0, total: 0, diasAtraso: 0 };
 
@@ -111,8 +110,6 @@ export default function DetallePrestamoPage() {
 
     const fechaVencimiento = new Date(cuota.dueDate);
     const hoy = new Date();
-
-    // Normalizamos horas para comparar solo fechas
     fechaVencimiento.setHours(0, 0, 0, 0);
     hoy.setHours(0, 0, 0, 0);
 
@@ -120,14 +117,8 @@ export default function DetallePrestamoPage() {
     const diasAtraso = Math.ceil((hoy - fechaVencimiento) / msPorDia);
 
     let moraActiva = 0;
-
     if (capitalPendiente > 0.01 && diasAtraso > 0) {
-      const TASA_MORA = 0.01; // 1% del monto de la cuota
-
-      // LÓGICA: 1% FIJO por cuota vencida
-      // Si vence 8/12 y pagas 8/12 -> diasAtraso=0, no cobra mora
-      // Si vence 8/12 y pagas 9/12 o después -> diasAtraso>0, cobra 1% fijo
-      // NO se acumula por meses, cada cuota tiene su propia mora del 1%
+      const TASA_MORA = 0.01;
       moraActiva = Number(cuota.amount) * TASA_MORA;
     }
 
@@ -146,20 +137,15 @@ export default function DetallePrestamoPage() {
   const abrirModalPago = (cuota) => {
     setCuotaSeleccionada(cuota);
     const desglose = calcularDesglosePago(cuota);
-
     setMontoPagar(redondearEfectivo(desglose.total));
     setMontoRecibido("");
     setMedioPago("EFECTIVO");
     setModalPagoOpen(true);
   };
 
+  // --- GENERACIÓN DE PDFS (LLAMADAS AL BACKEND) ---
   const generarComprobante = async (cuotaData) => {
     try {
-      const saldoCapital = prestamo.cronograma.reduce((total, c) => {
-        const capitalPendiente = c.capital - (c.capitalPagado || 0);
-        return total + capitalPendiente;
-      }, 0);
-
       const res = await fetch("/api/comprobantes/generar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -172,10 +158,6 @@ export default function DetallePrestamoPage() {
             nombre: prestamo.nombreCliente || "Cliente",
             numero_documento: prestamo.dniCliente,
             direccion: "-",
-          },
-          prestamo: {
-            fechaInicio: prestamo.fechaInicio,
-            saldoCapital: saldoCapital,
           },
         }),
       });
@@ -192,13 +174,11 @@ export default function DetallePrestamoPage() {
         window.URL.revokeObjectURL(url);
       } else {
         const errData = await res.json();
-        alert(
-          "Error al generar comprobante: " + (errData.error || "Desconocido")
-        );
+        alert("Error: " + (errData.error || "Desconocido"));
       }
     } catch (e) {
-      console.error("Error generando el comprobante:", e);
-      alert("Error de conexión al generar el comprobante.");
+      console.error(e);
+      alert("Error de conexión.");
     }
   };
 
@@ -225,40 +205,30 @@ export default function DetallePrestamoPage() {
         window.URL.revokeObjectURL(url);
       } else {
         const errData = await res.json();
-        alert("Error al generar factura: " + (errData.error || "Desconocido"));
+        alert("Error factura: " + (errData.error || "Desconocido"));
       }
     } catch (e) {
-      console.error("Error generando la factura:", e);
-      alert("Error de conexión al generar la factura.");
+      console.error(e);
+      alert("Error de conexión.");
     }
   };
 
+  // --- CONFIRMACIÓN DEL PAGO ---
   const confirmarPago = async () => {
     const montoNum = parseFloat(montoPagar);
 
-    if (!montoNum || montoNum <= 0) {
-      alert("Monto a pagar inválido");
-      return;
-    }
-
-    if (!cuotaSeleccionada || !prestamo) {
-      alert("No hay cuota seleccionada");
-      return;
-    }
+    if (!montoNum || montoNum <= 0) return alert("Monto inválido");
+    if (!cuotaSeleccionada || !prestamo) return alert("Error de selección");
 
     const desglose = calcularDesglosePago(cuotaSeleccionada);
 
-    // Validación flexible por redondeo (margen de 0.10)
     if (montoNum > desglose.total + 0.1) {
       if (
         !confirm(
-          `El monto ingresado (S/ ${montoNum}) es mayor al total calculado exacto (S/ ${desglose.total.toFixed(
-            2
-          )}). ¿Está seguro de continuar?`
+          `El monto (S/ ${montoNum}) es mayor al total calculado. ¿Continuar?`
         )
-      ) {
+      )
         return;
-      }
     }
 
     setProcesando(true);
@@ -271,17 +241,16 @@ export default function DetallePrestamoPage() {
     };
 
     try {
+      // 1. PAGO EFECTIVO
       if (medioPago === "EFECTIVO") {
         const recibidoNum = parseFloat(montoRecibido || "0");
         if (!recibidoNum || recibidoNum <= 0) {
-          alert("Ingrese el monto recibido en efectivo");
           setProcesando(false);
-          return;
+          return alert("Ingrese el monto recibido");
         }
         if (recibidoNum < montoNum) {
-          alert(`Error: Recibido menor a pagar.`);
           setProcesando(false);
-          return;
+          return alert("Recibido insuficiente");
         }
 
         const res = await fetch("/api/pagos", {
@@ -300,17 +269,12 @@ export default function DetallePrestamoPage() {
           alert("Pago registrado correctamente.");
           setModalPagoOpen(false);
 
-          // Generar factura o comprobante ANTES de actualizar los datos
-          const dniCliente = prestamo.dniCliente;
-          const esRuc = dniCliente && dniCliente.length === 11;
+          // Generar doc
+          const esRuc =
+            prestamo.dniCliente && prestamo.dniCliente.length === 11;
+          if (esRuc) await generarFactura(cuotaSeleccionada);
+          else await generarComprobante(cuotaSeleccionada);
 
-          if (esRuc) {
-            await generarFactura(cuotaSeleccionada);
-          } else {
-            await generarComprobante(cuotaSeleccionada);
-          }
-
-          // Actualizar los datos del préstamo después
           await fetchPrestamo();
         } else {
           alert("Error: " + data.message);
@@ -319,6 +283,7 @@ export default function DetallePrestamoPage() {
         return;
       }
 
+      // 2. PAGO ONLINE (YAPE / TARJETA) - AQUÍ ESTÁ EL CAMBIO
       if (medioPago === "BILLETERA" || medioPago === "TARJETA") {
         const res = await fetch("/api/flow/orden", {
           method: "POST",
@@ -331,16 +296,28 @@ export default function DetallePrestamoPage() {
         });
 
         const data = await res.json();
+
         if (!res.ok || !data.urlPago) {
           alert(`Error Flow: ${data.error || "No se generó link"}`);
           setProcesando(false);
           return;
         }
-        window.location.href = data.urlPago;
+
+        // --- CAMBIO: ABRIR EN NUEVA PESTAÑA ---
+        window.open(data.urlPago, "_blank");
+
+        setModalPagoOpen(false);
+        setProcesando(false);
+
+        // Aviso opcional para que el usuario sepa qué pasó
+        alert(
+          "La pasarela de pago se ha abierto en otra pestaña. Cuando finalices el pago, recarga esta página para ver la actualización."
+        );
+
         return;
       }
     } catch (error) {
-      console.error("Error en confirmarPago:", error);
+      console.error("Error confirmarPago:", error);
       alert("Error de conexión.");
     } finally {
       setProcesando(false);
@@ -455,19 +432,11 @@ export default function DetallePrestamoPage() {
                           const esRuc =
                             prestamo.dniCliente &&
                             prestamo.dniCliente.length === 11;
-                          if (esRuc) {
-                            generarFactura(c);
-                          } else {
-                            generarComprobante(c);
-                          }
+                          if (esRuc) generarFactura(c);
+                          else generarComprobante(c);
                         }}
                         className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
-                        title={
-                          prestamo.dniCliente &&
-                          prestamo.dniCliente.length === 11
-                            ? "Descargar Factura"
-                            : "Descargar Comprobante"
-                        }
+                        title="Descargar Documento"
                       >
                         📄
                       </button>
