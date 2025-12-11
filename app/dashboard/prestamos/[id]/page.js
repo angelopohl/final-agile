@@ -64,15 +64,18 @@ export default function DetallePrestamoPage() {
   useEffect(() => {
     if (id) {
       fetchPrestamo();
-      
+
       // Verificar si viene de un pago exitoso
-      const pagoExitoso = searchParams.get('pagoExitoso');
-      const numeroCuotaPagada = searchParams.get('cuota');
-      
-      if (pagoExitoso === 'true' && numeroCuotaPagada && prestamo) {
-        const cuotaPagada = prestamo.cronograma.find(c => c.num === parseInt(numeroCuotaPagada));
+      const pagoExitoso = searchParams.get("pagoExitoso");
+      const numeroCuotaPagada = searchParams.get("cuota");
+
+      if (pagoExitoso === "true" && numeroCuotaPagada && prestamo) {
+        const cuotaPagada = prestamo.cronograma.find(
+          (c) => c.num === parseInt(numeroCuotaPagada)
+        );
         if (cuotaPagada) {
-          const esRuc = prestamo.dniCliente && prestamo.dniCliente.length === 11;
+          const esRuc =
+            prestamo.dniCliente && prestamo.dniCliente.length === 11;
           if (esRuc) {
             generarFactura(cuotaPagada);
           } else {
@@ -222,9 +225,7 @@ export default function DetallePrestamoPage() {
         window.URL.revokeObjectURL(url);
       } else {
         const errData = await res.json();
-        alert(
-          "Error al generar factura: " + (errData.error || "Desconocido")
-        );
+        alert("Error al generar factura: " + (errData.error || "Desconocido"));
       }
     } catch (e) {
       console.error("Error generando la factura:", e);
@@ -298,17 +299,17 @@ export default function DetallePrestamoPage() {
         if (res.ok) {
           alert("Pago registrado correctamente.");
           setModalPagoOpen(false);
-          
+
           // Generar factura o comprobante ANTES de actualizar los datos
           const dniCliente = prestamo.dniCliente;
           const esRuc = dniCliente && dniCliente.length === 11;
-          
+
           if (esRuc) {
             await generarFactura(cuotaSeleccionada);
           } else {
             await generarComprobante(cuotaSeleccionada);
           }
-          
+
           // Actualizar los datos del préstamo después
           await fetchPrestamo();
         } else {
@@ -451,7 +452,9 @@ export default function DetallePrestamoPage() {
                     {abonadoTotal > 0 && (
                       <button
                         onClick={() => {
-                          const esRuc = prestamo.dniCliente && prestamo.dniCliente.length === 11;
+                          const esRuc =
+                            prestamo.dniCliente &&
+                            prestamo.dniCliente.length === 11;
                           if (esRuc) {
                             generarFactura(c);
                           } else {
@@ -459,7 +462,12 @@ export default function DetallePrestamoPage() {
                           }
                         }}
                         className="text-gray-600 hover:text-gray-900 p-1 border rounded hover:bg-gray-50"
-                        title={prestamo.dniCliente && prestamo.dniCliente.length === 11 ? "Descargar Factura" : "Descargar Comprobante"}
+                        title={
+                          prestamo.dniCliente &&
+                          prestamo.dniCliente.length === 11
+                            ? "Descargar Factura"
+                            : "Descargar Comprobante"
+                        }
                       >
                         📄
                       </button>
@@ -570,7 +578,7 @@ export default function DetallePrestamoPage() {
                       : "bg-gray-50 text-gray-700"
                   }`}
                 >
-                  Yape
+                  Pago efectivo fuera de caja o Billetera Digital
                 </button>
                 <button
                   onClick={() => setMedioPago("TARJETA")}
